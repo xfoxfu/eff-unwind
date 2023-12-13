@@ -20,12 +20,20 @@ struct handler_frame {
   std::string effect;
   handler_t handler;
   uint64_t id;
-  unw_word_t resume_unw_ptr;
+  unw_word_t resume_proc_start;
+  unw_word_t resume_proc_end;
+  unw_cursor_t resume_cursor;
 
   handler_frame(std::string effect,
                 handler_t handler,
-                unw_word_t resume_unw_ptr)
-      : effect(effect), handler(handler), resume_unw_ptr(resume_unw_ptr) {
+                unw_word_t resume_proc_start,
+                unw_word_t resume_proc_end,
+                unw_cursor_t resume_cursor)
+      : effect(effect),
+        handler(handler),
+        resume_proc_start(resume_proc_start),
+        resume_proc_end(resume_proc_end),
+        resume_cursor(resume_cursor) {
     id = last_frame_id++;
   }
 };
@@ -44,7 +52,8 @@ struct handler_result_resume : handler_result {
 };
 
 struct handler_result_break : handler_result {
-  handler_result_break() {}
+  std::any value;
+  handler_result_break(std::any value) : value(value) {}
   virtual bool is_resume() { return false; }
   virtual bool is_break() { return true; }
 };
@@ -61,7 +70,8 @@ auto handle(std::string effect, handler_t handler) {
   unw_proc_info_t proc_info;
   unw_get_proc_info(&cursor, &proc_info);
 
-  auto frame = handler_frame(effect, handler, proc_info.start_ip);
+  auto frame = handler_frame(effect, handler, proc_info.start_ip,
+                             proc_info.end_ip, cursor);
   auto frame_id = frame.id;
   frames.push_back(std::move(frame));
   return sg::make_scope_guard([frame_id]() {
@@ -73,6 +83,11 @@ auto handle(std::string effect, handler_t handler) {
 
 // TODO: use real static type
 std::any raise(std::string effect) {
+  // trick the compiler to generate exception tables
+  static volatile bool never_throw = false;
+  if (never_throw) {
+    throw 42;
+  }
   auto frame = std::find_if(frames.rbegin(), frames.rend(), [&](auto frame) {
     fmt::println("compare handler={}, effect={}", frame.effect, effect);
     return frame.effect == effect;
@@ -87,62 +102,55 @@ std::any raise(std::string effect) {
   fmt::println("after handler");
   if (result->is_break()) {
     // when break, need to do unwinding
-    // TODO: pass return value
+    // step more to get to parent function to make caller returns
+    unw_step(&frame->resume_cursor);
     fmt::println("before resume");
-    unw_cursor_t cursor;
-    unw_context_t uc;
-    unw_getcontext(&uc);
-    unw_init_local(&cursor, &uc);
-    while (unw_step(&cursor) > 0) {
-      unw_proc_info_t proc_info;
-      unw_get_proc_info(&cursor, &proc_info);
-      // TODO: here it uses start_ip since clang-aarch64-macos does not have
-      // gp nor unwind_info pointers, and unw_cursor_t does not perserve after
-      // stack changes.
-      // further: unw_cursor_t will preserve ip, so it will resume to the point
-      // where handler is registered.
-      // TODO: need to investigate if multiple handlers are registered
-      fmt::println("compare proc_info={:#x} to resume_ptr={:#x}",
-                   proc_info.start_ip, frame->resume_unw_ptr);
-      if (proc_info.start_ip == frame->resume_unw_ptr) {
-        break;
-      }
-    }
-    unw_resume(&cursor);
+    // TODO: support more complex calling conventions of returning >64-bit
+    // values.
+    unw_set_reg(
+        &frame->resume_cursor, UNW_AARCH64_X0,
+        std::any_cast<int>(dynamic_cast<handler_result_break&>(*result).value));
+    unw_resume(&frame->resume_cursor);
     assert(false);  // unreachable
   } else if (result->is_resume()) {
     // resume is treated as normal function return
     return dynamic_cast<handler_result_resume&>(*result).value;
-  } else {
-    assert(false);  // unreachable
   }
+  assert(false);  // unreachable
+  return -1;      // unreachable
 }
 
 // user program
 
 struct RAII {
-  ~RAII() {}
+  ~RAII() { fmt::println("RAII destructor"); }
 };
 
-void foobar() {
+int foobar() {
   fmt::println("before raise");
   auto num = raise("exception");
+  // FIXME: if compiled as separate library, maybe clang will mark all as
+  // throwing
   fmt::println("after raise: {}", std::any_cast<int>(num));
   fmt::println("foobar continue");
+  return 56;
 }
 
-void has_handler() {
+int has_handler() {
   auto guard = handle("exception", []() {
-    return std::make_unique<handler_result_resume>(42);
-    // return std::make_unique<handler_result_break>();
+    // return std::make_unique<handler_result_resume>(42);
+    return std::make_unique<handler_result_break>(72);
   });
   int num = 42;
   RAII raii;
   fmt::println("has_handler begin");
-  foobar();
-  fmt::println("has_handler end: {}", num);
+  int ret = foobar();
+  fmt::println("has_handler end: {} ret={}", num, ret);
+  return 24;
 }
 
 int main() {
-  has_handler();
+  auto val = has_handler();
+  // FIXME: if Release mode is specified, cannot be handled correctly
+  fmt::println("main end: {}", val);
 }
