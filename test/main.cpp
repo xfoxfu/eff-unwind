@@ -6,20 +6,20 @@ struct RAII {
 
 struct Exception : public effect<uint64_t, uint64_t> {};
 
-with_effect_ret<Exception, int> foobar() {
-  with_effect<Exception, int> ctx;
+with_effect<Exception, int> foobar() {
+  effect_ctx<Exception, int> ctx;
   fmt::println("before raise");
   auto num = ctx.raise(0);
   fmt::println("after raise: {}", std::any_cast<uint64_t>(num));
   fmt::println("foobar continue");
-  return std::move(ctx).ret(56);
+  return ctx.ret(56);
 }
 
 uint64_t has_handler() {
   auto guard = handle<Exception>(
       [](uint64_t in) -> std::unique_ptr<handler_result<uint64_t>> {
-        // return std::make_unique<handler_result_resume>((uint64_t)42);
-        return std::make_unique<handler_result_break<uint64_t>>((uint64_t)72);
+        // return handler_resume<uint64_t>(42);
+        return handler_return<uint64_t>(72);
       });
   int num = 42;
   RAII raii;

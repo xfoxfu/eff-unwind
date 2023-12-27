@@ -35,7 +35,7 @@ _Unwind_Reason_Code eff_stop_fn(int version,
 
     auto cursor = reinterpret_cast<unw_cursor_t*>(context);
     // TODO: support more complex calling conventions for >64bit values.
-    unw_set_reg(cursor, UNW_AARCH64_X0, 20);
+    unw_set_reg(cursor, UNW_AARCH64_X0, frame.set_x0);
     unw_resume(cursor);
     assert(false);
   }

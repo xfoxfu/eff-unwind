@@ -10,47 +10,52 @@
 #include "fmt/core.h"
 #include "scope_guard.hpp"
 
-template <typename Input, typename Output>
+template <typename Raise, typename Resume>
 class effect {
  public:
-  typedef Input input_t;
-  typedef Output output_t;
+  typedef Raise raise_t;
+  typedef Resume resume_t;
 };
 
 template <typename T>
 concept is_effect =
-    std::is_base_of<effect<typename T::input_t, typename T::output_t>, T>();
+    std::is_base_of<effect<typename T::raise_t, typename T::resume_t>, T>();
 
-template <typename Effect, typename Value>
+template <typename Effect, typename Return>
   requires is_effect<Effect>
-class with_effect_ret;
+class with_effect;
 
-template <typename Effect, typename Value>
+template <typename Effect, typename Return>
   requires is_effect<Effect>
-class with_effect {
+class effect_ctx {
  public:
-  Effect::output_t raise(Effect::input_t in);
+  typedef Return return_t;
 
-  with_effect_ret<Effect, Value> ret(Value val) && {
-    return with_effect_ret<Effect, Value>(*this, std::move(val));
+  Effect::resume_t raise(Effect::raise_t in);
+
+  with_effect<Effect, Return> ret(Return val) {
+    return with_effect<Effect, Return>(*this, std::move(val));
   }
 };
 
-template <typename Effect, typename Value>
+template <typename Effect, typename Return>
   requires is_effect<Effect>
-class with_effect_ret {
+class with_effect {
  public:
-  Value value;
+  Return value;
 
-  with_effect_ret(with_effect<Effect, Value> ctx, Value&& value)
-      : value(value) {}
+  with_effect(effect_ctx<Effect, Return> ctx, Return&& value) : value(value) {}
 };
 
+// TODO: enable result have different type for return and resume, and enforce
+// type checking
 template <typename Result>
 struct handler_result {
   virtual bool is_resume() = 0;
   virtual bool is_break() = 0;
   virtual ~handler_result() {}
+
+  static std::unique_ptr<handler_result<Result>> resume(Result value);
 };
 
 template <typename Result>
@@ -69,12 +74,22 @@ struct handler_result_break : public handler_result<Result> {
   virtual bool is_break() { return true; }
 };
 
+template <typename Result>
+std::unique_ptr<handler_result<Result>> handler_resume(Result value) {
+  return std::make_unique<handler_result_resume<Result>>(value);
+}
+
+template <typename Result>
+std::unique_ptr<handler_result<Result>> handler_return(Result value) {
+  return std::make_unique<handler_result_break<Result>>(value);
+}
+
 template <typename Effect, typename F>
 concept is_handler_of =
-    is_effect<Effect> && std::is_invocable<F, typename Effect::output_t>() &&
+    is_effect<Effect> && std::is_invocable<F, typename Effect::resume_t>() &&
     std::is_same<
-        std::unique_ptr<handler_result<typename Effect::output_t>>,
-        typename std::invoke_result<F, typename Effect::input_t>::type>();
+        std::unique_ptr<handler_result<typename Effect::resume_t>>,
+        typename std::invoke_result<F, typename Effect::raise_t>::type>();
 
 template <typename Effect, typename F>
   requires is_handler_of<Effect, F>
@@ -83,13 +98,11 @@ auto handle(F handler);
 // ===== implementation =====
 
 struct handler_frame_found {
-  unw_cursor_t resume_cursor;
   const char* effect_typename;
+  unw_word_t set_x0;
 
-  handler_frame_found(unw_cursor_t cur, const char* tyn) {
-    resume_cursor = cur;
-    effect_typename = tyn;
-  }
+  handler_frame_found(const char* effect_typename, unw_word_t set_x0)
+      : effect_typename(effect_typename), set_x0(set_x0) {}
 };
 
 struct handler_frame_base {
@@ -107,8 +120,8 @@ struct handler_frame_invoke : public handler_frame_base {
   handler_frame_invoke(std::type_index effect, unw_cursor_t resume_cursor)
       : handler_frame_base(effect, resume_cursor) {}
 
-  virtual std::unique_ptr<handler_result<typename Effect::output_t>> invoke(
-      Effect::input_t in) = 0;
+  virtual std::unique_ptr<handler_result<typename Effect::resume_t>> invoke(
+      Effect::raise_t in) = 0;
 };
 
 template <typename Effect>
@@ -129,8 +142,8 @@ struct handler_frame : public can_handle<Effect>,
                 unw_cursor_t resume_cursor)
       : handler_frame_invoke<Effect>(effect, resume_cursor), handler(handler) {}
 
-  virtual std::unique_ptr<handler_result<typename Effect::output_t>> invoke(
-      Effect::input_t in) {
+  virtual std::unique_ptr<handler_result<typename Effect::resume_t>> invoke(
+      Effect::raise_t in) {
     return handler(in);
   }
 };
@@ -170,7 +183,7 @@ _Unwind_Reason_Code eff_stop_fn(int version,
 
 template <typename Effect, typename Value>
   requires is_effect<Effect>
-Effect::output_t with_effect<Effect, Value>::raise(Effect::input_t in) {
+Effect::resume_t effect_ctx<Effect, Value>::raise(Effect::raise_t in) {
   // trick the compiler to generate exception tables
   static volatile bool never_throw = false;
   if (never_throw) {
@@ -211,7 +224,10 @@ Effect::output_t with_effect<Effect, Value>::raise(Effect::input_t in) {
     ex->private_2 = target_sp;  // sp;
     ex->exception_cleanup =
         (decltype(ex->exception_cleanup))(new handler_frame_found(
-            (*frame)->resume_cursor, (*frame)->effect.name()));
+            (*frame)->effect.name(),
+            dynamic_cast<handler_result_break<typename Effect::resume_t>&>(
+                *result)
+                .value));
     while (unw_step(&cur_cursor)) {
       unw_proc_info_t pi;
       unw_get_proc_info(&cur_cursor, &pi);
@@ -248,7 +264,7 @@ Effect::output_t with_effect<Effect, Value>::raise(Effect::input_t in) {
 
     assert(false);  // unreachable
   } else if (result->is_resume()) {
-    auto res = dynamic_cast<handler_result_resume<typename Effect::output_t>&>(
+    auto res = dynamic_cast<handler_result_resume<typename Effect::resume_t>&>(
         *result);
     // resume is treated as normal function return
     return res.value;
