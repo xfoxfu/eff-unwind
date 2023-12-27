@@ -1,9 +1,9 @@
 #include "eff-unwind.hpp"
 #include <libunwind.h>
-#include <boost/stacktrace.hpp>
 #include <iostream>
 #include <typeindex>
 #include "fmt/core.h"
+
 thread_local uint64_t last_frame_id = 0;
 
 // TODO: add mutex guard for frame
@@ -21,7 +21,6 @@ _Unwind_Reason_Code eff_stop_fn(int version,
                                 _Unwind_Exception* exceptionObject,
                                 struct _Unwind_Context* context,
                                 void* stop_parameter) {
-  // unw_step(reinterpret_cast<unw_cursor_t*>(context));
   unw_word_t cur_sp;
   unw_get_reg(reinterpret_cast<unw_cursor_t*>(context), UNW_AARCH64_SP,
               &cur_sp);
@@ -34,18 +33,8 @@ _Unwind_Reason_Code eff_stop_fn(int version,
     fmt::println("stop_fn: resume to handler of '{}'", frame.effect_typename);
     exceptionObject->exception_cleanup = nullptr;
 
-    // unw_context_t uc;
-    // unw_getcontext(&uc);
-
-    // unw_set_reg(&frame.resume_cursor, UNW_AARCH64_X0, 20);
-    // unw_word_t ip;
-    // unw_get_reg(&frame.resume_cursor, UNW_AARCH64_PC, &ip);
-    // fmt::println("resume to ip={:#x}", ip);
-    // std::cout << boost::stacktrace::stacktrace();
-
-    // unw_resume(&frame.resume_cursor);
-
     auto cursor = reinterpret_cast<unw_cursor_t*>(context);
+    // TODO: support more complex calling conventions for >64bit values.
     unw_set_reg(cursor, UNW_AARCH64_X0, 20);
     unw_resume(cursor);
     assert(false);

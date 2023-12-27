@@ -29,16 +29,14 @@ FetchContent_Populate(scope_guard)
 add_library(scope_guard INTERFACE)
 target_include_directories(scope_guard INTERFACE ${scope_guard_SOURCE_DIR})
 
-find_package(Boost REQUIRED COMPONENTS stacktrace_basic)
-
 add_library(eff-unwind
   "include/eff-unwind.hpp"
   "src/eff-unwind.cpp"
 )
 target_compile_features(eff-unwind PUBLIC cxx_std_20)
 set_target_properties(eff-unwind PROPERTIES CXX_EXTENSIONS OFF)
-target_include_directories(eff-unwind PUBLIC include ${Boost_INCLUDE_DIRS})
-target_link_libraries(eff-unwind PUBLIC scope_guard fmt::fmt ${Boost_LIBRARIES})
+target_include_directories(eff-unwind PUBLIC include)
+target_link_libraries(eff-unwind PUBLIC scope_guard fmt::fmt)
 target_compile_definitions(eff-unwind PUBLIC _GNU_SOURCE)
 
 add_executable(tests
@@ -46,16 +44,4 @@ add_executable(tests
 )
 target_compile_features(tests PRIVATE cxx_std_20)
 set_target_properties(tests PROPERTIES CXX_EXTENSIONS OFF)
-target_link_libraries(tests PRIVATE eff-unwind ${Boost_LIBRARIES})
-target_include_directories(tests PRIVATE ${Boost_INCLUDE_DIRS})
-
-
-if(CMAKE_BUILD_TYPE MATCHES "Debug")
-  set(
-    CMAKE_C_FLAGS
-    "${CMAKE_C_FLAGS} -Werror -fsanitize=undefined -fsanitize=address"
-  )
-  target_link_options(tests
-    BEFORE PUBLIC -fsanitize=undefined PUBLIC -fsanitize=address
-  )
-endif()
+target_link_libraries(tests PRIVATE eff-unwind)

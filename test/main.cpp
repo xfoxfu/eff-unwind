@@ -16,10 +16,10 @@ with_effect_ret<Exception, int> foobar() {
 }
 
 uint64_t has_handler() {
-  auto guard =
-      handle<Exception>([](uint64_t in) -> std::unique_ptr<handler_result> {
+  auto guard = handle<Exception>(
+      [](uint64_t in) -> std::unique_ptr<handler_result<uint64_t>> {
         // return std::make_unique<handler_result_resume>((uint64_t)42);
-        return std::make_unique<handler_result_break>((uint64_t)72);
+        return std::make_unique<handler_result_break<uint64_t>>((uint64_t)72);
       });
   int num = 42;
   RAII raii;

@@ -46,22 +46,25 @@ class with_effect_ret {
       : value(value) {}
 };
 
+template <typename Result>
 struct handler_result {
   virtual bool is_resume() = 0;
   virtual bool is_break() = 0;
   virtual ~handler_result() {}
 };
 
-struct handler_result_resume : handler_result {
-  std::any value;
-  handler_result_resume(std::any value) : value(value) {}
+template <typename Result>
+struct handler_result_resume : public handler_result<Result> {
+  Result value;
+  handler_result_resume(Result value) : value(value) {}
   virtual bool is_resume() { return true; }
   virtual bool is_break() { return false; }
 };
 
-struct handler_result_break : handler_result {
-  std::any value;
-  handler_result_break(std::any value) : value(value) {}
+template <typename Result>
+struct handler_result_break : public handler_result<Result> {
+  Result value;
+  handler_result_break(Result value) : value(value) {}
   virtual bool is_resume() { return false; }
   virtual bool is_break() { return true; }
 };
@@ -70,7 +73,7 @@ template <typename Effect, typename F>
 concept is_handler_of =
     is_effect<Effect> && std::is_invocable<F, typename Effect::output_t>() &&
     std::is_same<
-        std::unique_ptr<handler_result>,
+        std::unique_ptr<handler_result<typename Effect::output_t>>,
         typename std::invoke_result<F, typename Effect::input_t>::type>();
 
 template <typename Effect, typename F>
@@ -104,7 +107,8 @@ struct handler_frame_invoke : public handler_frame_base {
   handler_frame_invoke(std::type_index effect, unw_cursor_t resume_cursor)
       : handler_frame_base(effect, resume_cursor) {}
 
-  virtual std::unique_ptr<handler_result> invoke(Effect::input_t in) = 0;
+  virtual std::unique_ptr<handler_result<typename Effect::output_t>> invoke(
+      Effect::input_t in) = 0;
 };
 
 template <typename Effect>
@@ -125,7 +129,8 @@ struct handler_frame : public can_handle<Effect>,
                 unw_cursor_t resume_cursor)
       : handler_frame_invoke<Effect>(effect, resume_cursor), handler(handler) {}
 
-  virtual std::unique_ptr<handler_result> invoke(Effect::input_t in) {
+  virtual std::unique_ptr<handler_result<typename Effect::output_t>> invoke(
+      Effect::input_t in) {
     return handler(in);
   }
 };
@@ -214,12 +219,7 @@ Effect::output_t with_effect<Effect, Value>::raise(Effect::input_t in) {
       unw_word_t fp;
       unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &fp);
       fmt::println(", sp = {:#x}", fp);
-      // cannot find frame by comparing cursor
-      // if (memcmp(&cur_cursor, &frame->resume_cursor, sizeof(unw_cursor_t)) ==
-      // 0) {
-      //   break;
-      // }
-      // compare by sp
+      // cannot find frame by comparing cursor, so compare by sp
       if (fp == target_sp) {
         fmt::println("found = {:#x} == {:#x}", fp, target_sp);
         break;
@@ -232,9 +232,6 @@ Effect::output_t with_effect<Effect, Value>::raise(Effect::input_t in) {
       unw_get_reg(&cur_cursor, UNW_AARCH64_X0, &x0);
       fmt::println("current ip = {:#x} sp = {:#x} x0 = {:#x}", ip, sp, x0);
 
-      // unw_cursor_t dup_cursor;
-      // memcpy(&dup_cursor, &cur_cursor, sizeof(unw_cursor_t));
-
       // if not break, perform cleanup
       _Unwind_Personality_Fn personality =
           reinterpret_cast<_Unwind_Personality_Fn>(pi.handler);
@@ -245,25 +242,16 @@ Effect::output_t with_effect<Effect, Value>::raise(Effect::input_t in) {
       if (personalityResult == _URC_INSTALL_CONTEXT) {
         fmt::println("install context");
         unw_resume(&cur_cursor);
-        // _Unwind_Resume(ex.get());
         fmt::println("after cleanup for {:#x}", fp);
       }
     }
 
-    // // TODO: support more complex calling conventions of returning >64-bit
-    // // values.
-    assert(false);
-    unw_set_reg(
-        &(*frame)->resume_cursor, UNW_AARCH64_X0,
-        std::any_cast<int>(dynamic_cast<handler_result_break&>(*result).value));
-    unw_resume(&(*frame)->resume_cursor);
     assert(false);  // unreachable
   } else if (result->is_resume()) {
-    auto res = dynamic_cast<handler_result_resume&>(*result);
-    fmt::println("returning {} -> {}", res.value.type().name(),
-                 typeid(typename Effect::output_t).name());
+    auto res = dynamic_cast<handler_result_resume<typename Effect::output_t>&>(
+        *result);
     // resume is treated as normal function return
-    return std::any_cast<typename Effect::output_t>(res.value);
+    return res.value;
   }
   assert(false);  // unreachable
   return -1;      // unreachable
