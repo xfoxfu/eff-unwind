@@ -29,34 +29,33 @@ FetchContent_Populate(scope_guard)
 add_library(scope_guard INTERFACE)
 target_include_directories(scope_guard INTERFACE ${scope_guard_SOURCE_DIR})
 
-if (APPLE)
-  include(Addbrew)
-  add_brew_prefix(llvm)
-  set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} ${BREW_llvm_PREFIX})
-endif ()
-find_package(llvm REQUIRED CONFIG)
 find_package(Boost REQUIRED COMPONENTS stacktrace_basic)
 
-message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
-message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
-add_library(llvm_libunwind INTERFACE IMPORTED)
-target_include_directories(llvm_libunwind INTERFACE ${LLVM_INCLUDE_DIRS})
-# target_link_directories(llvm_libunwind INTERFACE ${LLVM_LIBRARY_DIRS})
-# target_link_libraries(llvm_libunwind INTERFACE unwind)
-add_library(llvm::libunwind ALIAS llvm_libunwind)
-
-add_library(eff-unwind INTERFACE
+add_library(eff-unwind
   "include/eff-unwind.hpp"
+  "src/eff-unwind.cpp"
 )
-target_compile_features(eff-unwind INTERFACE cxx_std_20)
+target_compile_features(eff-unwind PUBLIC cxx_std_20)
 set_target_properties(eff-unwind PROPERTIES CXX_EXTENSIONS OFF)
-target_include_directories(eff-unwind INTERFACE include)
+target_include_directories(eff-unwind PUBLIC include ${Boost_INCLUDE_DIRS})
+target_link_libraries(eff-unwind PUBLIC scope_guard fmt::fmt ${Boost_LIBRARIES})
+target_compile_definitions(eff-unwind PUBLIC _GNU_SOURCE)
 
 add_executable(tests
   "test/main.cpp"
 )
 target_compile_features(tests PRIVATE cxx_std_20)
 set_target_properties(tests PROPERTIES CXX_EXTENSIONS OFF)
-target_link_libraries(tests PRIVATE scope_guard fmt::fmt ${Boost_LIBRARIES})
+target_link_libraries(tests PRIVATE eff-unwind ${Boost_LIBRARIES})
 target_include_directories(tests PRIVATE ${Boost_INCLUDE_DIRS})
-target_compile_definitions(tests PRIVATE _GNU_SOURCE)
+
+
+if(CMAKE_BUILD_TYPE MATCHES "Debug")
+  set(
+    CMAKE_C_FLAGS
+    "${CMAKE_C_FLAGS} -Werror -fsanitize=undefined -fsanitize=address"
+  )
+  target_link_options(tests
+    BEFORE PUBLIC -fsanitize=undefined PUBLIC -fsanitize=address
+  )
+endif()
