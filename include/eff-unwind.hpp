@@ -7,7 +7,6 @@
 #include <optional>
 #include <type_traits>
 #include <typeindex>
-#include "fmt/core.h"
 #include "scope_guard.hpp"
 
 template <typename Raise, typename Resume>
@@ -166,7 +165,7 @@ auto handle(F handler) {
   frames.push_back(std::move(frame));
   return sg::make_scope_guard([frame_id]() {
     auto pop_frame_id = frames.back()->id;
-    fmt::println("dropping handler {}", pop_frame_id);
+
     frames.pop_back();
     assert(pop_frame_id == frame_id);
   });
@@ -189,25 +188,20 @@ Effect::resume_t effect_ctx<Effect, Value>::raise(Effect::raise_t in) {
   if (never_throw) {
     throw 42;
   }
-  auto frame =
-      std::find_if(frames.rbegin(), frames.rend(), [&](const auto& frame) {
-        fmt::println("compare handler={}, effect={}", frame->effect.name(),
-                     typeid(Effect).name());
-        return frame->effect == typeid(Effect);
-      });
-  fmt::println("after find_if");
+  auto frame = std::find_if(
+      frames.rbegin(), frames.rend(),
+      [&](const auto& frame) { return frame->effect == typeid(Effect); });
+
   if (frame == frames.rend()) {
-    fmt::println("no handler found!");
     std::abort();
   }
-  fmt::println("before handler");
+
   auto result = dynamic_cast<handler_frame_invoke<Effect>&>(**frame).invoke(in);
-  fmt::println("after handler");
+
   if (result->is_break()) {
     // when break, need to do unwinding
     // step more to get to parent function to make caller returns
     unw_step(&(*frame)->resume_cursor);
-    fmt::println("before resume");
 
     unw_word_t target_sp;
     unw_get_reg(&(*frame)->resume_cursor, UNW_AARCH64_SP, &target_sp);
@@ -231,13 +225,12 @@ Effect::resume_t effect_ctx<Effect, Value>::raise(Effect::raise_t in) {
     while (unw_step(&cur_cursor)) {
       unw_proc_info_t pi;
       unw_get_proc_info(&cur_cursor, &pi);
-      fmt::print("handler={:#x}", pi.handler);
+
       unw_word_t fp;
       unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &fp);
-      fmt::println(", sp = {:#x}", fp);
+
       // cannot find frame by comparing cursor, so compare by sp
       if (fp == target_sp) {
-        fmt::println("found = {:#x} == {:#x}", fp, target_sp);
         break;
       }
       unw_word_t ip;
@@ -246,19 +239,18 @@ Effect::resume_t effect_ctx<Effect, Value>::raise(Effect::raise_t in) {
       unw_get_reg(&cur_cursor, UNW_AARCH64_PC, &ip);
       unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &sp);
       unw_get_reg(&cur_cursor, UNW_AARCH64_X0, &x0);
-      fmt::println("current ip = {:#x} sp = {:#x} x0 = {:#x}", ip, sp, x0);
 
       // if not break, perform cleanup
       _Unwind_Personality_Fn personality =
           reinterpret_cast<_Unwind_Personality_Fn>(pi.handler);
-      _Unwind_Reason_Code personalityResult =
-          personality(1, _UA_CLEANUP_PHASE, EXCEPTION_CLASS, ex.get(),
-                      reinterpret_cast<struct _Unwind_Context*>(&cur_cursor));
-      fmt::println("cleanup result = {}", (int)personalityResult);
-      if (personalityResult == _URC_INSTALL_CONTEXT) {
-        fmt::println("install context");
-        unw_resume(&cur_cursor);
-        fmt::println("after cleanup for {:#x}", fp);
+      if (personality != nullptr) {
+        _Unwind_Reason_Code personalityResult =
+            personality(1, _UA_CLEANUP_PHASE, EXCEPTION_CLASS, ex.get(),
+                        reinterpret_cast<struct _Unwind_Context*>(&cur_cursor));
+
+        if (personalityResult == _URC_INSTALL_CONTEXT) {
+          unw_resume(&cur_cursor);
+        }
       }
     }
 

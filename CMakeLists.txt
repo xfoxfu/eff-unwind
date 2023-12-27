@@ -45,15 +45,3 @@ add_executable(tests
 target_compile_features(tests PRIVATE cxx_std_20)
 set_target_properties(tests PROPERTIES CXX_EXTENSIONS OFF)
 target_link_libraries(tests PRIVATE eff-unwind)
-
-
-if(CMAKE_BUILD_TYPE MATCHES "Debug")
-  set(
-    CMAKE_C_FLAGS
-    "${CMAKE_C_FLAGS} -Werror -fsanitize=undefined -fsanitize=address"
-  )
-  # target_compile_options(tests PUBLIC -Werror -fsanitize=undefined -fsanitize=address)
-  target_link_options(tests
-    BEFORE PUBLIC -fsanitize=undefined PUBLIC -fsanitize=address
-  )
-endif()

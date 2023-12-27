@@ -2,7 +2,6 @@
 #include <libunwind.h>
 #include <iostream>
 #include <typeindex>
-#include "fmt/core.h"
 
 thread_local uint64_t last_frame_id = 0;
 
@@ -24,13 +23,13 @@ _Unwind_Reason_Code eff_stop_fn(int version,
   unw_word_t cur_sp;
   unw_get_reg(reinterpret_cast<unw_cursor_t*>(context), UNW_AARCH64_SP,
               &cur_sp);
-  fmt::println("stop_fn: {:#x} <=> {:#x}", cur_sp, exceptionObject->private_2);
+
   if (cur_sp == exceptionObject->private_2) {
     auto frame_ptr = reinterpret_cast<handler_frame_found*>(
         exceptionObject->exception_cleanup);
     auto frame = *frame_ptr;
     delete frame_ptr;
-    fmt::println("stop_fn: resume to handler of '{}'", frame.effect_typename);
+
     exceptionObject->exception_cleanup = nullptr;
 
     auto cursor = reinterpret_cast<unw_cursor_t*>(context);
