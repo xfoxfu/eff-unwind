@@ -45,3 +45,26 @@ add_executable(tests
 target_compile_features(tests PRIVATE cxx_std_20)
 set_target_properties(tests PROPERTIES CXX_EXTENSIONS OFF)
 target_link_libraries(tests PRIVATE eff-unwind)
+# if(CMAKE_BUILD_TYPE MATCHES "Debug")
+#   set(
+#     CMAKE_C_FLAGS
+#     "${CMAKE_C_FLAGS} -Werror -fsanitize=undefined -fsanitize=address"
+#   )
+#   target_link_options(tests
+#     BEFORE PUBLIC -fsanitize=undefined PUBLIC -fsanitize=address
+#   )
+# endif()
+
+function(add_test BIN_NAME SRC_FILE)
+  add_executable(${BIN_NAME} ${SRC_FILE})
+  target_compile_features(${BIN_NAME} PRIVATE cxx_std_20)
+  set_target_properties(${BIN_NAME} PROPERTIES CXX_EXTENSIONS OFF)
+  target_link_libraries(${BIN_NAME} PRIVATE eff-unwind)
+endfunction()
+
+add_test(test_main "test/main.cpp")
+add_test(test_counter "test/counter.cpp")
+add_test(test_counter1 "test/counter1.cpp")
+add_test(test_counter10 "test/counter10.cpp")
+add_test(test_mstate "test/mstate.cpp")
+add_test(test_exception "test/exception.cpp")

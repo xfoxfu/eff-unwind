@@ -20,30 +20,35 @@ template <typename T>
 concept is_effect =
     std::is_base_of<effect<typename T::raise_t, typename T::resume_t>, T>();
 
-template <typename Effect, typename Return>
-  requires is_effect<Effect>
+template <typename Return, typename... Effects>
+  requires(is_effect<Effects> && ...)
 class with_effect;
 
-template <typename Effect, typename Return>
-  requires is_effect<Effect>
+template <typename Return, typename... Effects>
+  requires(is_effect<Effects> && ...)
 class effect_ctx {
  public:
   typedef Return return_t;
 
-  Effect::resume_t raise(Effect::raise_t in);
+  template <typename E>
+    requires is_effect<E> && (std::is_same<Effects, E>() || ...)
+  E::resume_t raise(E::raise_t in);
 
-  with_effect<Effect, Return> ret(Return val) {
-    return with_effect<Effect, Return>(*this, std::move(val));
+  // Effect::resume_t raise(Effect::raise_t in);
+
+  with_effect<Return, Effects...> ret(Return val) {
+    return with_effect<Return, Effects...>(*this, std::move(val));
   }
 };
 
-template <typename Effect, typename Return>
-  requires is_effect<Effect>
+template <typename Return, typename... Effects>
+  requires(is_effect<Effects> && ...)
 class with_effect {
  public:
   Return value;
 
-  with_effect(effect_ctx<Effect, Return> ctx, Return&& value) : value(value) {}
+  with_effect(effect_ctx<Return, Effects...> ctx, Return&& value)
+      : value(value) {}
 };
 
 // TODO: enable result have different type for return and resume, and enforce
@@ -180,9 +185,11 @@ _Unwind_Reason_Code eff_stop_fn(int version,
                                 struct _Unwind_Context* context,
                                 void* stop_parameter);
 
-template <typename Effect, typename Value>
-  requires is_effect<Effect>
-Effect::resume_t effect_ctx<Effect, Value>::raise(Effect::raise_t in) {
+template <typename Value, typename... Effects>
+  requires(is_effect<Effects> && ...)
+template <typename Effect>
+  requires is_effect<Effect> && (std::is_same<Effects, Effect>() || ...)
+Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
   // trick the compiler to generate exception tables
   static volatile bool never_throw = false;
   if (never_throw) {
@@ -196,7 +203,7 @@ Effect::resume_t effect_ctx<Effect, Value>::raise(Effect::raise_t in) {
     std::abort();
   }
 
-  auto result = dynamic_cast<handler_frame_invoke<Effect>&>(**frame).invoke(in);
+  auto result = static_cast<handler_frame_invoke<Effect>&>(**frame).invoke(in);
 
   if (result->is_break()) {
     // when break, need to do unwinding
