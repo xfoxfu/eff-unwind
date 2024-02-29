@@ -11,7 +11,7 @@ FetchContent_Declare(
   GIT_TAG        v3.3.2
 )
 
-FetchContent_MakeAvailable(Catch2)
+# FetchContent_MakeAvailable(Catch2)
 
 FetchContent_Declare(
   fmt
@@ -28,6 +28,8 @@ FetchContent_Declare(
 FetchContent_Populate(scope_guard)
 add_library(scope_guard INTERFACE)
 target_include_directories(scope_guard INTERFACE ${scope_guard_SOURCE_DIR})
+
+find_package(Boost 1.70 COMPONENTS context REQUIRED)
 
 add_library(eff-unwind
   "include/eff-unwind.hpp"
@@ -64,7 +66,24 @@ endfunction()
 
 add_test(test_main "test/main.cpp")
 add_test(test_counter "test/counter.cpp")
-add_test(test_counter1 "test/counter1.cpp")
 add_test(test_counter10 "test/counter10.cpp")
 add_test(test_mstate "test/mstate.cpp")
 add_test(test_exception "test/exception.cpp")
+add_test(test_noexception "test/noexception.cpp")
+
+add_library(cpp_effects INTERFACE)
+target_include_directories(cpp_effects INTERFACE bench/include)
+target_link_libraries(cpp_effects INTERFACE Boost::context)
+
+function(add_test_eff BIN_NAME SRC_FILE)
+  add_executable(${BIN_NAME} ${SRC_FILE})
+  target_compile_features(${BIN_NAME} PRIVATE cxx_std_20)
+  set_target_properties(${BIN_NAME} PROPERTIES CXX_EXTENSIONS OFF)
+  target_link_libraries(${BIN_NAME} PRIVATE cpp_effects)
+endfunction()
+
+add_test_eff(test_eff_counter "bench/counter.cpp")
+add_test_eff(test_eff_counter10 "bench/counter10.cpp")
+add_test_eff(test_eff_mstate "bench/mstate.cpp")
+add_test_eff(test_eff_exception "bench/exception.cpp")
+add_test_eff(test_eff_noexception "bench/noexception.cpp")

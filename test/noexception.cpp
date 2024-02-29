@@ -5,7 +5,7 @@ struct Exception : public effect<uint64_t, uint64_t> {};
 
 with_effect<int, Exception> foobar() {
   effect_ctx<int, Exception> ctx;
-  auto num = ctx.raise<Exception>(0);
+  // auto num = ctx.raise<Exception>(0);
   return ctx.ret(56);
 }
 
@@ -18,6 +18,7 @@ uint64_t has_handler() {
   return foobar().value;
 }
 
+#include <iostream>
 void test() {
   auto val = has_handler();
   assert(val == 72);

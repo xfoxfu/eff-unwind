@@ -208,7 +208,7 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
   if (result->is_break()) {
     // when break, need to do unwinding
     // step more to get to parent function to make caller returns
-    unw_step(&(*frame)->resume_cursor);
+    // unw_step(&(*frame)->resume_cursor);
 
     unw_word_t target_sp;
     unw_get_reg(&(*frame)->resume_cursor, UNW_AARCH64_SP, &target_sp);

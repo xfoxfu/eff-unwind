@@ -30,6 +30,8 @@ void run(uint64_t n) {
 }
 
 int main() {
-  run(10000);
+  for (int i = 0; i < 1000; i++) {
+    run(1000);
+  }
   return 0;
 }
