@@ -159,8 +159,8 @@ auto handle(F handler) {
   unw_context_t uc;
   unw_getcontext(&uc);
   unw_init_local(&cursor, &uc);
-  // step to go to the caller function
-  unw_step(&cursor);
+  // // step to go to the caller function
+  // unw_step(&cursor);
   unw_proc_info_t proc_info;
   unw_get_proc_info(&cursor, &proc_info);
 
@@ -208,7 +208,7 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
   if (result->is_break()) {
     // when break, need to do unwinding
     // step more to get to parent function to make caller returns
-    // unw_step(&(*frame)->resume_cursor);
+  unw_step(&(*frame)->resume_cursor);
 
     unw_word_t target_sp;
     unw_get_reg(&(*frame)->resume_cursor, UNW_AARCH64_SP, &target_sp);
