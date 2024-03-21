@@ -3,10 +3,12 @@
 #include <unwind_itanium.h>
 #include <any>
 #include <cassert>
+#include <cstddef>
 #include <functional>
 #include <optional>
 #include <type_traits>
 #include <typeindex>
+#include <variant>
 #include "scope_guard.hpp"
 
 template <typename Raise, typename Resume>
@@ -27,6 +29,9 @@ class with_effect;
 template <typename Return, typename... Effects>
   requires(is_effect<Effects> && ...)
 class effect_ctx {
+  bool has_resume = false;
+  char resume_value[std::max({sizeof(typename Effects::resume_t)...})];
+
  public:
   typedef Return return_t;
 
@@ -39,6 +44,11 @@ class effect_ctx {
   with_effect<Return, Effects...> ret(Return val) {
     return with_effect<Return, Effects...>(*this, std::move(val));
   }
+
+  // TODO: use friend to hide visibility
+  template <typename E>
+    requires is_effect<E>
+  void __set_resume(typename E::resume_t value);
 };
 
 template <typename Return, typename... Effects>
@@ -51,55 +61,37 @@ class with_effect {
       : value(value) {}
 };
 
-// TODO: enable result have different type for return and resume, and enforce
-// type checking
-template <typename Result>
-struct handler_result {
-  virtual bool is_resume() = 0;
-  virtual bool is_break() = 0;
-  virtual ~handler_result() {}
+template <typename Effect>
+  requires is_effect<Effect>
+class resume_context {
+  // TODO: try zero-copy
+  std::function<void(typename Effect::resume_t)> set_resume;
 
-  static std::unique_ptr<handler_result<Result>> resume(Result value);
+ public:
+  resume_context(std::function<void(typename Effect::resume_t)> setter) {
+    set_resume = setter;
+  }
+
+  void resume(Effect::resume_t value);
 };
 
-template <typename Result>
-struct handler_result_resume : public handler_result<Result> {
-  Result value;
-  handler_result_resume(Result value) : value(value) {}
-  virtual bool is_resume() { return true; }
-  virtual bool is_break() { return false; }
-};
-
-template <typename Result>
-struct handler_result_break : public handler_result<Result> {
-  Result value;
-  handler_result_break(Result value) : value(value) {}
-  virtual bool is_resume() { return false; }
-  virtual bool is_break() { return true; }
-};
-
-template <typename Result>
-std::unique_ptr<handler_result<Result>> handler_resume(Result value) {
-  return std::make_unique<handler_result_resume<Result>>(value);
-}
-
-template <typename Result>
-std::unique_ptr<handler_result<Result>> handler_return(Result value) {
-  return std::make_unique<handler_result_break<Result>>(value);
-}
-
+// TODO: check return type of handler equal to parent function
 template <typename Effect, typename F>
 concept is_handler_of =
-    is_effect<Effect> && std::is_invocable<F, typename Effect::resume_t>() &&
-    std::is_same<
-        std::unique_ptr<handler_result<typename Effect::resume_t>>,
-        typename std::invoke_result<F, typename Effect::raise_t>::type>();
+    is_effect<Effect> &&
+    std::is_invocable<F, typename Effect::resume_t, resume_context<Effect>>();
 
 template <typename Effect, typename F>
   requires is_handler_of<Effect, F>
 auto handle(F handler);
 
 // ===== implementation =====
+
+template <typename Effect>
+  requires is_effect<Effect>
+void resume_context<Effect>::resume(typename Effect::resume_t value) {
+  set_resume(value);
+}
 
 struct handler_frame_found {
   const char* effect_typename;
@@ -124,8 +116,8 @@ struct handler_frame_invoke : public handler_frame_base {
   handler_frame_invoke(std::type_index effect, unw_cursor_t resume_cursor)
       : handler_frame_base(effect, resume_cursor) {}
 
-  virtual std::unique_ptr<handler_result<typename Effect::resume_t>> invoke(
-      Effect::raise_t in) = 0;
+  virtual Effect::resume_t invoke(Effect::raise_t in,
+                                  resume_context<Effect> ctx) = 0;
 };
 
 template <typename Effect>
@@ -146,9 +138,9 @@ struct handler_frame : public can_handle<Effect>,
                 unw_cursor_t resume_cursor)
       : handler_frame_invoke<Effect>(effect, resume_cursor), handler(handler) {}
 
-  virtual std::unique_ptr<handler_result<typename Effect::resume_t>> invoke(
-      Effect::raise_t in) {
-    return handler(in);
+  virtual Effect::resume_t invoke(Effect::raise_t in,
+                                  resume_context<Effect> ctx) {
+    return handler(in, ctx);
   }
 };
 
@@ -203,71 +195,75 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
     std::abort();
   }
 
-  auto result = static_cast<handler_frame_invoke<Effect>&>(**frame).invoke(in);
+  resume_context<Effect> rctx([this](Effect::resume_t&& value) {
+    has_resume = true;
+    *reinterpret_cast<Effect::resume_t*>(&resume_value) = value;
+  });
+  auto result =
+      static_cast<handler_frame_invoke<Effect>&>(**frame).invoke(in, rctx);
 
-  if (result->is_break()) {
-    // when break, need to do unwinding
-    // step more to get to parent function to make caller returns
+  // resume is called
+  if (has_resume) {
+    return reinterpret_cast<Effect::resume_t>(resume_value);
+  }
+
+  // resume is not called, meaning breaking
+  // when break, need to do unwinding
+  // step more to get to parent function to make caller returns
   unw_step(&(*frame)->resume_cursor);
 
-    unw_word_t target_sp;
-    unw_get_reg(&(*frame)->resume_cursor, UNW_AARCH64_SP, &target_sp);
-    unw_cursor_t cur_cursor;
-    unw_context_t uc;
-    unw_getcontext(&uc);
-    unw_init_local(&cur_cursor, &uc);
-    std::unique_ptr<_Unwind_Exception> ex =
-        std::make_unique<_Unwind_Exception>();
-    ex->exception_class = EXCEPTION_CLASS;
-    ex->private_1 = reinterpret_cast<uintptr_t>(eff_stop_fn);  // 0;
-    unw_word_t sp;
-    unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &sp);
-    ex->private_2 = target_sp;  // sp;
-    ex->exception_cleanup =
-        (decltype(ex->exception_cleanup))(new handler_frame_found(
-            (*frame)->effect.name(),
-            dynamic_cast<handler_result_break<typename Effect::resume_t>&>(
-                *result)
-                .value));
-    while (unw_step(&cur_cursor)) {
-      unw_proc_info_t pi;
-      unw_get_proc_info(&cur_cursor, &pi);
+  unw_word_t target_sp;
+  unw_get_reg(&(*frame)->resume_cursor, UNW_AARCH64_SP, &target_sp);
+  unw_cursor_t cur_cursor;
+  unw_context_t uc;
+  unw_getcontext(&uc);
+  unw_init_local(&cur_cursor, &uc);
+  std::unique_ptr<_Unwind_Exception> ex = std::make_unique<_Unwind_Exception>();
+  ex->exception_class = EXCEPTION_CLASS;
+  ex->private_1 = reinterpret_cast<uintptr_t>(eff_stop_fn);  // 0;
+  unw_word_t sp;
+  unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &sp);
+  ex->private_2 = target_sp;  // sp;
+  ex->exception_cleanup =
+      (decltype(ex->exception_cleanup))(new handler_frame_found(
+          (*frame)->effect.name(), static_cast<unw_word_t>(result)));
+  while (unw_step(&cur_cursor)) {
+    unw_proc_info_t pi;
+    unw_get_proc_info(&cur_cursor, &pi);
 
-      unw_word_t fp;
-      unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &fp);
+    unw_word_t fp;
+    unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &fp);
 
-      // cannot find frame by comparing cursor, so compare by sp
-      if (fp == target_sp) {
-        break;
-      }
-      unw_word_t ip;
-      unw_word_t sp;
-      unw_word_t x0;
-      unw_get_reg(&cur_cursor, UNW_AARCH64_PC, &ip);
-      unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &sp);
-      unw_get_reg(&cur_cursor, UNW_AARCH64_X0, &x0);
-
-      // if not break, perform cleanup
-      _Unwind_Personality_Fn personality =
-          reinterpret_cast<_Unwind_Personality_Fn>(pi.handler);
-      if (personality != nullptr) {
-        _Unwind_Reason_Code personalityResult =
-            personality(1, _UA_CLEANUP_PHASE, EXCEPTION_CLASS, ex.get(),
-                        reinterpret_cast<struct _Unwind_Context*>(&cur_cursor));
-
-        if (personalityResult == _URC_INSTALL_CONTEXT) {
-          unw_resume(&cur_cursor);
-        }
-      }
+    // cannot find frame by comparing cursor, so compare by sp
+    if (fp == target_sp) {
+      break;
     }
 
-    assert(false);  // unreachable
-  } else if (result->is_resume()) {
-    auto res = dynamic_cast<handler_result_resume<typename Effect::resume_t>&>(
-        *result);
-    // resume is treated as normal function return
-    return res.value;
+    // if not break, perform cleanup
+    _Unwind_Personality_Fn personality =
+        reinterpret_cast<_Unwind_Personality_Fn>(pi.handler);
+    if (personality != nullptr) {
+      _Unwind_Reason_Code personalityResult =
+          personality(1, _UA_CLEANUP_PHASE, EXCEPTION_CLASS, ex.get(),
+                      reinterpret_cast<struct _Unwind_Context*>(&cur_cursor));
+
+      if (personalityResult == _URC_INSTALL_CONTEXT) {
+        unw_resume(&cur_cursor);
+      }
+    }
   }
+
   assert(false);  // unreachable
-  return -1;      // unreachable
+  return static_cast<typename Effect::resume_t>(NULL);
+
+  // }
+  // else if (result->is_resume()) {
+  //   auto res =
+  //       dynamic_cast<handler_result_resume<typename
+  //       Effect::resume_t>&>(*result);
+  //   // resume is treated as normal function return
+  //   return res.value;
+  // }
+  // assert(false);  // unreachable
+  // return -1;      // unreachable
 }

@@ -17,15 +17,15 @@ with_effect<int, Get, Set> countdown() {
 
 void run(uint64_t n) {
   auto s = n;
-  auto handle_get = handle<Get>(
-      [&](uint64_t in) -> std::unique_ptr<handler_result<uint64_t>> {
-        return handler_resume<uint64_t>(s);
-      });
-  auto handle_set = handle<Set>(
-      [&](uint64_t in) -> std::unique_ptr<handler_result<uint64_t>> {
-        s = in;
-        return handler_resume<uint64_t>(s);
-      });
+  auto handle_get = handle<Get>([&](uint64_t in, auto ctx) -> uint64_t {
+    ctx.resume(s);
+    return 0;
+  });
+  auto handle_set = handle<Set>([&](uint64_t in, auto ctx) -> uint64_t {
+    s = in;
+    ctx.resume(s);
+    return 0;
+  });
   countdown();
 }
 

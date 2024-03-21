@@ -14,11 +14,11 @@ with_effect<int, Exception> foobar() {
 }
 
 uint64_t has_handler() {
-  auto guard = handle<Exception>(
-      [](uint64_t in) -> std::unique_ptr<handler_result<uint64_t>> {
-        // return handler_resume<uint64_t>(42);
-        return handler_return<uint64_t>(72);
-      });
+  auto guard = handle<Exception>([](uint64_t in, auto ctx) -> uint64_t {
+    ctx.resume(42);
+    // return handler_resume<uint64_t>(42);
+    return 72;
+  });
   int num = 42;
   // RAII raii;
   int ret = foobar().value;
