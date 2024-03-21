@@ -65,12 +65,12 @@ template <typename Effect>
   requires is_effect<Effect>
 class resume_context {
   // TODO: try zero-copy
-  std::function<void(typename Effect::resume_t)> set_resume;
+  bool* ctx_has_resume;
+  char* ctx_resume_value;
 
  public:
-  resume_context(std::function<void(typename Effect::resume_t)> setter) {
-    set_resume = setter;
-  }
+  resume_context(bool* ctx_has_resume, char* ctx_resume_value)
+      : ctx_has_resume(ctx_has_resume), ctx_resume_value(ctx_resume_value) {}
 
   void resume(Effect::resume_t value);
 };
@@ -90,7 +90,8 @@ auto handle(F handler);
 template <typename Effect>
   requires is_effect<Effect>
 void resume_context<Effect>::resume(typename Effect::resume_t value) {
-  set_resume(value);
+  *ctx_has_resume = true;
+  *ctx_resume_value = value;
 }
 
 struct handler_frame_found {
@@ -151,10 +152,6 @@ auto handle(F handler) {
   unw_context_t uc;
   unw_getcontext(&uc);
   unw_init_local(&cursor, &uc);
-  // // step to go to the caller function
-  // unw_step(&cursor);
-  unw_proc_info_t proc_info;
-  unw_get_proc_info(&cursor, &proc_info);
 
   auto frame = std::make_unique<handler_frame<Effect, F>>(typeid(Effect),
                                                           handler, cursor);
@@ -195,10 +192,8 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
     std::abort();
   }
 
-  resume_context<Effect> rctx([this](Effect::resume_t&& value) {
-    has_resume = true;
-    *reinterpret_cast<Effect::resume_t*>(&resume_value) = value;
-  });
+  resume_context<Effect> rctx(&has_resume,
+                              reinterpret_cast<char*>(&resume_value));
   auto result =
       static_cast<handler_frame_invoke<Effect>&>(**frame).invoke(in, rctx);
 

@@ -62,6 +62,11 @@ function(add_test BIN_NAME SRC_FILE)
   target_compile_features(${BIN_NAME} PRIVATE cxx_std_20)
   set_target_properties(${BIN_NAME} PROPERTIES CXX_EXTENSIONS OFF)
   target_link_libraries(${BIN_NAME} PRIVATE eff-unwind)
+  # if(CMAKE_BUILD_TYPE MATCHES "Debug")
+  # target_link_options(${BIN_NAME}
+  #   BEFORE PUBLIC -fsanitize=undefined PUBLIC -fsanitize=address
+  # )
+  # endif()
 endfunction()
 
 add_test(test_main "test/main.cpp")
