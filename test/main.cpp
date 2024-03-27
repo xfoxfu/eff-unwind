@@ -18,10 +18,12 @@ uint64_t has_handler() {
     ctx.resume(42);
     // return handler_resume<uint64_t>(42);
     return 72;
+    fmt::println("non-tail resumption");
   });
   int num = 42;
   // RAII raii;
   int ret = foobar().value;
+  resume_nontail();
   return 24;
 }
 
@@ -32,7 +34,7 @@ void test() {
 }
 
 int main() {
-  int MAX = 1'000'000;
+  int MAX = 1;  //  1'000'000;
   auto begin = std::chrono::high_resolution_clock::now();
 
   for (int i = 0; i < MAX; i++) {

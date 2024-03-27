@@ -3,6 +3,8 @@
 #include <iostream>
 #include <typeindex>
 
+thread_local std::vector<char> SAVED_STACK;
+
 thread_local uint64_t last_frame_id = 0;
 
 // TODO: add mutex guard for frame
@@ -39,4 +41,18 @@ _Unwind_Reason_Code eff_stop_fn(int version,
     assert(false);
   }
   return _URC_NO_REASON;  // unreachable
+}
+
+void resume_nontail() {
+  assert(!SAVED_STACK.empty());
+  unw_cursor_t cur_cursor;
+  unw_context_t uc;
+  unw_getcontext(&uc);
+  unw_init_local(&cur_cursor, &uc);
+  unw_step(&cur_cursor);
+  unw_word_t sp;
+  unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &sp);
+  fmt::println("end of stack = {:#x} - {:#x}", sp, sp - SAVED_STACK.size());
+  std::copy(SAVED_STACK.begin(), SAVED_STACK.end(),
+            reinterpret_cast<char*>(sp) - SAVED_STACK.size());
 }
