@@ -106,17 +106,17 @@ struct handler_frame_found {
 struct handler_frame_base {
   std::type_index effect;
   uint64_t id;
-  unw_cursor_t resume_cursor;
+  uintptr_t resume_fp;
 
-  handler_frame_base(std::type_index effect, unw_cursor_t resume_cursor);
+  handler_frame_base(std::type_index effect, uintptr_t resume_fp);
 
   virtual ~handler_frame_base() {}
 };
 
 template <typename Effect>
 struct handler_frame_invoke : public handler_frame_base {
-  handler_frame_invoke(std::type_index effect, unw_cursor_t resume_cursor)
-      : handler_frame_base(effect, resume_cursor) {}
+  handler_frame_invoke(std::type_index effect, uintptr_t resume_fp)
+      : handler_frame_base(effect, resume_fp) {}
 
   virtual Effect::resume_t invoke(Effect::raise_t in,
                                   resume_context<Effect> ctx) = 0;
@@ -135,10 +135,8 @@ struct handler_frame : public can_handle<Effect>,
                        public handler_frame_invoke<Effect> {
   Handler handler;
 
-  handler_frame(std::type_index effect,
-                Handler handler,
-                unw_cursor_t resume_cursor)
-      : handler_frame_invoke<Effect>(effect, resume_cursor), handler(handler) {}
+  handler_frame(std::type_index effect, Handler handler, uintptr_t resume_fp)
+      : handler_frame_invoke<Effect>(effect, resume_fp), handler(handler) {}
 
   virtual Effect::resume_t invoke(Effect::raise_t in,
                                   resume_context<Effect> ctx) {
@@ -153,13 +151,28 @@ auto handle(F handler) {
   // walking used by ETW and other services. It must point to the previous {x29,
   // x30} pair on the stack.
   // FIXME: use FP instead of unw_get_register
-  unw_cursor_t cursor;
-  unw_context_t uc;
-  unw_getcontext(&uc);
-  unw_init_local(&cursor, &uc);
+  // unw_cursor_t cursor;
+  // unw_context_t uc;
+  // unw_getcontext(&uc);
+  // unw_init_local(&cursor, &uc);
+  // unw_word_t target_sp;
+  // unw_word_t target_fp;
+  uint64_t fp;
+  asm volatile("mov %0, fp" : "=r"(fp));
+  // fmt::println("fp={:#x}", fp);
+  // fmt::println("previous fp={:#x}", *reinterpret_cast<uint64_t*>(fp));
+  // fmt::println("previous lr={:#x}", *(reinterpret_cast<uint64_t*>(fp) + 1));
+  // unw_step(&cursor);
+  // unw_get_reg(&cursor, UNW_AARCH64_SP, &target_sp);
+  // unw_get_reg(&cursor, UNW_AARCH64_FP, &target_fp);
+  // fmt::println("sp={:#x}, fp={:#x}", target_sp, target_fp);
+  // unw_step(&cursor);
+  // unw_get_reg(&cursor, UNW_AARCH64_SP, &target_sp);
+  // unw_get_reg(&cursor, UNW_AARCH64_FP, &target_fp);
+  // fmt::println("sp={:#x}, fp={:#x}", target_sp, target_fp);
 
-  auto frame = std::make_unique<handler_frame<Effect, F>>(typeid(Effect),
-                                                          handler, cursor);
+  auto frame = std::make_unique<handler_frame<Effect, F>>(
+      typeid(Effect), handler, *reinterpret_cast<uint64_t*>(fp));
   auto frame_id = frame->id;
   frames.push_back(std::move(frame));
   return sg::make_scope_guard([frame_id]() {
@@ -207,35 +220,23 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
 
   // resume is called
   if (has_resume) {
-    unw_word_t sp;
-    unw_cursor_t cur_cursor;
-    unw_context_t uc;
-    unw_getcontext(&uc);
-    unw_init_local(&cur_cursor, &uc);
-    unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &sp);
+    // unw_word_t sp;
+    // unw_cursor_t cur_cursor;
+    // unw_context_t uc;
+    // unw_getcontext(&uc);
+    // unw_init_local(&cur_cursor, &uc);
+    // unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &sp);
     // https://community.arm.com/arm-community-blogs/b/architectures-and-processors-blog/posts/using-the-stack-in-aarch32-and-aarch64
     // The stack is full-descending, meaning that sp – the stack pointer –
     // points to the most recently pushed object on the stack, and it grows
     // downwards, towards lower addresses.
-    unw_word_t sp2;
-    unw_cursor_t cursor_frame = (**frame).resume_cursor;
-    unw_step(&cursor_frame);
-    unw_get_reg(&cursor_frame, UNW_AARCH64_SP, &sp2);
-    fmt::println("stack range = {:#x} ~ {:#x}", sp, sp2);
-    SAVED_STACK.clear();
-    SAVED_STACK.resize(sp2 - sp);
-    std::copy(reinterpret_cast<char*>(sp), reinterpret_cast<char*>(sp2),
-              SAVED_STACK.begin());
     return reinterpret_cast<Effect::resume_t>(resume_value);
   }
 
   // resume is not called, meaning breaking
   // when break, need to do unwinding
   // step more to get to parent function to make caller returns
-  unw_step(&(*frame)->resume_cursor);
-
-  unw_word_t target_sp;
-  unw_get_reg(&(*frame)->resume_cursor, UNW_AARCH64_SP, &target_sp);
+  auto target_fp = (**frame).resume_fp;
   unw_cursor_t cur_cursor;
   unw_context_t uc;
   unw_getcontext(&uc);
@@ -245,7 +246,7 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
   ex->private_1 = reinterpret_cast<uintptr_t>(eff_stop_fn);
   unw_word_t sp;
   unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &sp);
-  ex->private_2 = target_sp;
+  ex->private_2 = target_fp;
   ex->exception_cleanup =
       (decltype(ex->exception_cleanup))(new handler_frame_found(
           (*frame)->effect.name(), static_cast<unw_word_t>(result)));
@@ -253,11 +254,11 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
     unw_proc_info_t pi;
     unw_get_proc_info(&cur_cursor, &pi);
 
-    unw_word_t sp;
-    unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &sp);
+    unw_word_t fp;
+    unw_get_reg(&cur_cursor, UNW_AARCH64_FP, &fp);
 
     // cannot find frame by comparing cursor, so compare by sp
-    if (sp == target_sp) {
+    if (fp == target_fp) {
       break;
     }
 
