@@ -11,8 +11,9 @@ thread_local uint64_t last_frame_id = 0;
 thread_local std::vector<std::unique_ptr<handler_frame_base>> frames;
 
 handler_frame_base::handler_frame_base(std::type_index effect,
-                                       uintptr_t resume_fp)
-    : effect(effect), resume_fp(resume_fp) {
+                                       uintptr_t resume_fp,
+                                       uintptr_t handler_sp)
+    : effect(effect), resume_fp(resume_fp), handler_sp(handler_sp) {
   id = last_frame_id++;
 }
 
