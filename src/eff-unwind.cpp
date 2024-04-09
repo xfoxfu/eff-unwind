@@ -1,9 +1,11 @@
 #include "eff-unwind.hpp"
 #include <libunwind.h>
+#include <csetjmp>
 #include <iostream>
 #include <typeindex>
 
 thread_local std::vector<char> SAVED_STACK;
+thread_local jmp_buf SAVED_JMP;
 
 thread_local uint64_t last_frame_id = 0;
 
@@ -26,6 +28,7 @@ _Unwind_Reason_Code eff_stop_fn(int version,
   unw_word_t cur_fp;
   unw_get_reg(reinterpret_cast<unw_cursor_t*>(context), UNW_AARCH64_FP,
               &cur_fp);
+  fmt::println("unwind at {}", cur_fp);
 
   if (cur_fp == exceptionObject->private_2) {
     auto frame_ptr = reinterpret_cast<handler_frame_found*>(
@@ -42,4 +45,17 @@ _Unwind_Reason_Code eff_stop_fn(int version,
     assert(false);
   }
   return _URC_NO_REASON;  // unreachable
+}
+
+void print_frames() {
+  unw_cursor_t cursor;
+  unw_context_t uc;
+  unw_getcontext(&uc);
+  unw_init_local(&cursor, &uc);
+  int i = 0;
+  do {
+    unw_word_t sp;
+    unw_get_reg(&cursor, UNW_AARCH64_SP, &sp);
+    fmt::println("[{}] sp={:#x}", i++, sp);
+  } while (unw_step(&cursor));
 }

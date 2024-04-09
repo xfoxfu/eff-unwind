@@ -75,6 +75,7 @@ add_test(test_counter "test/counter.cpp")
 # add_test(test_mstate "test/mstate.cpp")
 # add_test(test_exception "test/exception.cpp")
 # add_test(test_noexception "test/noexception.cpp")
+add_test(test_setjmp "test/setjmp.cpp")
 
 add_library(cpp_effects INTERFACE)
 target_include_directories(cpp_effects INTERFACE bench/include)

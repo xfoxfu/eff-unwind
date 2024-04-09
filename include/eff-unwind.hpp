@@ -3,6 +3,7 @@
 #include <unwind_itanium.h>
 #include <any>
 #include <cassert>
+#include <csetjmp>
 #include <cstddef>
 #include <functional>
 #include <optional>
@@ -11,6 +12,10 @@
 #include <variant>
 #include "fmt/core.h"
 #include "scope_guard.hpp"
+
+#ifdef NDEBUG
+void print_frames();
+#endif
 
 template <typename Raise, typename Resume>
 class effect {
@@ -45,11 +50,6 @@ class effect_ctx {
   with_effect<Return, Effects...> ret(Return val) {
     return with_effect<Return, Effects...>(*this, std::move(val));
   }
-
-  // TODO: use friend to hide visibility
-  template <typename E>
-    requires is_effect<E>
-  void __set_resume(typename E::resume_t value);
 };
 
 template <typename Return, typename... Effects>
@@ -62,18 +62,25 @@ class with_effect {
       : value(value) {}
 };
 
+struct handler_frame_base;
+
 template <typename Effect>
   requires is_effect<Effect>
 class resume_context {
   // TODO: try zero-copy
   bool* ctx_has_resume;
   char* ctx_resume_value;
+  handler_frame_base& handler_frame;
 
  public:
-  resume_context(bool* ctx_has_resume, char* ctx_resume_value)
-      : ctx_has_resume(ctx_has_resume), ctx_resume_value(ctx_resume_value) {}
+  resume_context(bool* ctx_has_resume,
+                 char* ctx_resume_value,
+                 handler_frame_base& handler_sp)
+      : ctx_has_resume(ctx_has_resume),
+        ctx_resume_value(ctx_resume_value),
+        handler_frame(handler_sp) {}
 
-  void resume(Effect::resume_t value);
+  bool resume(Effect::resume_t value);
 };
 
 // TODO: check return type of handler equal to parent function
@@ -87,13 +94,6 @@ template <typename Effect, typename F>
 auto handle(F handler);
 
 // ===== implementation =====
-
-template <typename Effect>
-  requires is_effect<Effect>
-void resume_context<Effect>::resume(typename Effect::resume_t value) {
-  *ctx_has_resume = true;
-  *ctx_resume_value = value;
-}
 
 struct handler_frame_found {
   const char* effect_typename;
@@ -153,6 +153,39 @@ struct handler_frame : public can_handle<Effect>,
   }
 };
 
+// FIXME: non-global jmp_buf, saved stack
+extern thread_local jmp_buf SAVED_JMP;
+extern thread_local std::vector<char> SAVED_STACK;
+
+template <typename Effect>
+  requires is_effect<Effect>
+bool resume_context<Effect>::resume(typename Effect::resume_t value) {
+  *ctx_has_resume = true;
+  *ctx_resume_value = value;
+  unw_word_t sp;
+  unw_cursor_t cur_cursor;
+  unw_context_t uc;
+  unw_getcontext(&uc);
+  unw_init_local(&cur_cursor, &uc);
+  unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &sp);
+  // https://community.arm.com/arm-community-blogs/b/architectures-and-processors-blog/posts/using-the-stack-in-aarch32-and-aarch64
+  // The stack is full-descending, meaning that sp – the stack pointer –
+  // points to the most recently pushed object on the stack, and it grows
+  // downwards, towards lower addresses.
+  auto sp2 = handler_frame.handler_sp;
+  fmt::println("stack range = {:#x} ~ {:#x}", sp, sp2);
+  SAVED_STACK.clear();
+  SAVED_STACK.resize(sp2 - sp);
+  std::copy(reinterpret_cast<char*>(sp), reinterpret_cast<char*>(sp2),
+            SAVED_STACK.begin());
+  if (setjmp(SAVED_JMP) != 0) {
+    fmt::println("another run");
+    *ctx_has_resume = false;
+    return false;
+  }
+  return true;
+}
+
 template <typename Effect, typename F>
   requires is_handler_of<Effect, F>
 auto handle(F handler) {
@@ -162,11 +195,8 @@ auto handle(F handler) {
   uint64_t fp;
   asm volatile("mov %0, fp" : "=r"(fp));
 
-#ifdef NDEBUG
   uint64_t sp;
   asm volatile("mov %0, sp" : "=r"(sp));
-  fmt::println("handle sp={:#x}", sp);
-#endif
 
   auto frame = std::make_unique<handler_frame<Effect, F>>(
       typeid(Effect), handler, *reinterpret_cast<uint64_t*>(fp), sp);
@@ -189,9 +219,6 @@ _Unwind_Reason_Code eff_stop_fn(int version,
                                 struct _Unwind_Context* context,
                                 void* stop_parameter);
 
-// FIXME: non-global saved stack
-extern thread_local std::vector<char> SAVED_STACK;
-
 template <typename Value, typename... Effects>
   requires(is_effect<Effects> && ...)
 template <typename Effect>
@@ -211,37 +238,17 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
   }
 
   resume_context<Effect> rctx(&has_resume,
-                              reinterpret_cast<char*>(&resume_value));
+                              reinterpret_cast<char*>(&resume_value), **frame);
   auto result =
       static_cast<handler_frame_invoke<Effect>&>(**frame).invoke(in, rctx);
 
   // resume is called
   if (has_resume) {
-    unw_word_t sp;
-    unw_cursor_t cur_cursor;
-    unw_context_t uc;
-    unw_getcontext(&uc);
-    unw_init_local(&cur_cursor, &uc);
-    unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &sp);
-    // https://community.arm.com/arm-community-blogs/b/architectures-and-processors-blog/posts/using-the-stack-in-aarch32-and-aarch64
-    // The stack is full-descending, meaning that sp – the stack pointer –
-    // points to the most recently pushed object on the stack, and it grows
-    // downwards, towards lower addresses.
-    // unw_word_t fp;
-    // do {
-    //   unw_step(&cur_cursor);
-    //   unw_get_reg(&cur_cursor, UNW_AARCH64_FP, &fp);
-    // } while (fp != (**frame).resume_fp);
-    // unw_word_t sp2;
-    // unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &sp2);
-    auto sp2 = (**frame).handler_sp;
-    fmt::println("stack range = {:#x} ~ {:#x}", sp, sp2);
-    SAVED_STACK.clear();
-    SAVED_STACK.resize(sp2 - sp);
-    std::copy(reinterpret_cast<char*>(sp), reinterpret_cast<char*>(sp2),
-              SAVED_STACK.begin());
+    has_resume = false;
+    fmt::println("has_resume = {}", has_resume);
     return reinterpret_cast<Effect::resume_t>(resume_value);
   }
+  fmt::println("no_resume");
 
   // resume is not called, meaning breaking
   // when break, need to do unwinding
@@ -260,7 +267,10 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
   ex->exception_cleanup =
       (decltype(ex->exception_cleanup))(new handler_frame_found(
           (*frame)->effect.name(), static_cast<unw_word_t>(result)));
-  while (unw_step(&cur_cursor)) {
+  fmt::println("before step");
+  int unw_error;
+  while ((unw_error = unw_step(&cur_cursor)) > 0) {
+    fmt::println("step");
     unw_proc_info_t pi;
     unw_get_proc_info(&cur_cursor, &pi);
 
@@ -269,6 +279,7 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
 
     // cannot find frame by comparing cursor, so compare by sp
     if (fp == target_fp) {
+      fmt::println("reaching fp={}, break", target_fp);
       break;
     }
 
@@ -276,16 +287,19 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
     _Unwind_Personality_Fn personality =
         reinterpret_cast<_Unwind_Personality_Fn>(pi.handler);
     if (personality != nullptr) {
+      fmt::println("call personality fn");
       _Unwind_Reason_Code personalityResult =
           personality(1, _UA_CLEANUP_PHASE, EXCEPTION_CLASS, ex.get(),
                       reinterpret_cast<struct _Unwind_Context*>(&cur_cursor));
 
       if (personalityResult == _URC_INSTALL_CONTEXT) {
+        fmt::println("unw_install_context");
         unw_resume(&cur_cursor);
       }
     }
   }
 
+  fmt::println("unreachable! = {}", unw_error);
   assert(false);  // unreachable
   return static_cast<typename Effect::resume_t>(NULL);
 }
@@ -297,4 +311,5 @@ __attribute__((always_inline)) inline void resume_nontail() {
   fmt::println("end of stack = {:#x} - {:#x}", sp - SAVED_STACK.size(), sp);
   std::copy(SAVED_STACK.begin(), SAVED_STACK.end(),
             reinterpret_cast<char*>(sp) - SAVED_STACK.size());
+  longjmp(SAVED_JMP, 1);
 }
