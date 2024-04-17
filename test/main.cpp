@@ -14,28 +14,31 @@ with_effect<int, Exception> foobar() {
 }
 
 uint64_t has_handler() {
-#ifdef NDEBUG
+#ifdef EFF_UNWIND_TRACE
   uint64_t sp;
   asm volatile("mov %0, sp" : "=r"(sp));
   fmt::println("has_handler sp={:#x}", sp);
-  print_frames();
+  print_frames("has_handler pre");
 #endif
 
   auto guard = handle<Exception>([](uint64_t in, auto ctx) -> uint64_t {
-    print_frames();
+    print_frames("handler pre");
     if (ctx.resume(42)) {
       return 0;
     }
-    print_frames();
+    print_frames("handler post");
+    uint64_t sp;
+    asm volatile("mov %0, sp" : "=r"(sp));
+    // print_memory(reinterpret_cast<const char*>(sp),
+    //              reinterpret_cast<const char*>(sp) + SAVED_STACK.size());
     fmt::println("non-tail resumption");
     return 0;
   });
   int num = 42;
   // RAII raii;
   int ret = foobar().value;
-  print_frames();
+  print_frames("has_handler post");
   resume_nontail();
-  return 24;
 }
 
 void test() {
@@ -45,7 +48,7 @@ void test() {
 }
 
 int main() {
-  int MAX = 1;  // '000'000;
+  volatile int MAX = 1;  // '000'000;
   auto begin = std::chrono::high_resolution_clock::now();
 
   for (int i = 0; i < MAX; i++) {

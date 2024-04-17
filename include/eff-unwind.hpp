@@ -13,8 +13,10 @@
 #include "fmt/core.h"
 #include "scope_guard.hpp"
 
-#ifdef NDEBUG
-void print_frames();
+#ifdef EFF_UNWIND_TRACE
+void print_frames(const char* prefix);
+
+void print_memory(const char* start, const char* end);
 #endif
 
 template <typename Raise, typename Resume>
@@ -160,6 +162,7 @@ extern thread_local std::vector<char> SAVED_STACK;
 template <typename Effect>
   requires is_effect<Effect>
 bool resume_context<Effect>::resume(typename Effect::resume_t value) {
+  print_frames("resume");
   *ctx_has_resume = true;
   *ctx_resume_value = value;
   unw_word_t sp;
@@ -188,7 +191,8 @@ bool resume_context<Effect>::resume(typename Effect::resume_t value) {
 
 template <typename Effect, typename F>
   requires is_handler_of<Effect, F>
-auto handle(F handler) {
+__attribute__((always_inline)) auto handle(F handler) {
+  print_frames("handle");
   // The frame pointer (x29) is required for compatibility with fast stack
   // walking used by ETW and other services. It must point to the previous {x29,
   // x30} pair on the stack.
@@ -304,12 +308,29 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
   return static_cast<typename Effect::resume_t>(NULL);
 }
 
-__attribute__((always_inline)) inline void resume_nontail() {
+[[noreturn]] static void __resume_nontail(uint64_t sp) {
   assert(!SAVED_STACK.empty());
-  uint64_t sp;
-  asm volatile("mov %0, sp" : "=r"(sp));
-  fmt::println("end of stack = {:#x} - {:#x}", sp - SAVED_STACK.size(), sp);
+  fmt::println("end of stack = {:#x} - {:#x}", sp, sp + SAVED_STACK.size());
+  // asm volatile("sub sp, sp, %0" : : "r"(SAVED_STACK.size()));
   std::copy(SAVED_STACK.begin(), SAVED_STACK.end(),
-            reinterpret_cast<char*>(sp) - SAVED_STACK.size());
+            reinterpret_cast<char*>(sp));
+  fmt::println("long jump");
   longjmp(SAVED_JMP, 1);
 }
+
+[[noreturn]] __attribute__((always_inline)) inline void resume_nontail() {
+  auto stack_size = SAVED_STACK.size();
+  asm volatile("sub sp, sp, %0" : : "r"(stack_size));
+  uint64_t sp;
+  asm volatile("mov %0, sp" : "=r"(sp));
+  __resume_nontail(sp);
+}
+
+// __attribute__((always_inline)) inline void resume_nontail() {
+//   uint64_t sp;
+//   asm volatile("mov %0, sp" : "=r"(sp));
+//   fmt::println("end of stack = {:#x} - {:#x}", sp - SAVED_STACK.size(), sp);
+//   std::copy(SAVED_STACK.begin(), SAVED_STACK.end(),
+//             reinterpret_cast<char*>(sp) - SAVED_STACK.size());
+//   longjmp(SAVED_JMP, 1);
+// }

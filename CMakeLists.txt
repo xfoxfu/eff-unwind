@@ -40,6 +40,7 @@ set_target_properties(eff-unwind PROPERTIES CXX_EXTENSIONS OFF)
 target_include_directories(eff-unwind PUBLIC include)
 target_link_libraries(eff-unwind PUBLIC scope_guard fmt::fmt)
 target_compile_definitions(eff-unwind PUBLIC _GNU_SOURCE)
+target_compile_definitions(eff-unwind PUBLIC EFF_UNWIND_TRACE)
 
 add_executable(tests
   "test/main.cpp"

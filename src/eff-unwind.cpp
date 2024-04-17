@@ -1,5 +1,6 @@
 #include "eff-unwind.hpp"
 #include <libunwind.h>
+#include <sys/_types/_uintptr_t.h>
 #include <csetjmp>
 #include <iostream>
 #include <typeindex>
@@ -28,9 +29,11 @@ _Unwind_Reason_Code eff_stop_fn(int version,
   unw_word_t cur_fp;
   unw_get_reg(reinterpret_cast<unw_cursor_t*>(context), UNW_AARCH64_FP,
               &cur_fp);
-  fmt::println("unwind at {}", cur_fp);
+  fmt::println("unwind at fp={:#x}", cur_fp);
+  print_frames("unwind stop fn");
 
   if (cur_fp == exceptionObject->private_2) {
+    fmt::println("reaching target fp");
     auto frame_ptr = reinterpret_cast<handler_frame_found*>(
         exceptionObject->exception_cleanup);
     auto frame = *frame_ptr;
@@ -47,15 +50,39 @@ _Unwind_Reason_Code eff_stop_fn(int version,
   return _URC_NO_REASON;  // unreachable
 }
 
-void print_frames() {
+#ifdef EFF_UNWIND_TRACE
+void print_frames(const char* prefix) {
   unw_cursor_t cursor;
   unw_context_t uc;
   unw_getcontext(&uc);
   unw_init_local(&cursor, &uc);
   int i = 0;
-  do {
-    unw_word_t sp;
+  while (unw_step(&cursor)) {
+    unw_word_t sp, ip, off;
     unw_get_reg(&cursor, UNW_AARCH64_SP, &sp);
-    fmt::println("[{}] sp={:#x}", i++, sp);
-  } while (unw_step(&cursor));
+    unw_get_reg(&cursor, UNW_AARCH64_PC, &ip);
+    unw_proc_info_t proc_info;
+    unw_get_proc_info(&cursor, &proc_info);
+    char* proc_name = new char[1000];
+    unw_get_proc_name(&cursor, proc_name, 1000, &off);
+    fmt::println("{:16} [{}] sp={:#x} ip={:#x} {} +{:#x}", prefix, i++, sp, ip,
+                 proc_name, off);
+    delete[] proc_name;
+  }
 }
+
+void print_memory(const char* start, const char* end) {
+  fmt::println("stack over {:#x}-{:#x}", reinterpret_cast<uintptr_t>(start),
+               reinterpret_cast<uintptr_t>(end));
+  for (auto i = start; i < end; i++) {
+    fmt::print("{:02x}", *i);
+    if ((i - start + 1) % 8 == 0) {
+      fmt::print(" ");
+    }
+    if ((i - start + 1) % 64 == 0) {
+      fmt::print("\n");
+    }
+  }
+  fmt::print("\n");
+}
+#endif
