@@ -15,6 +15,7 @@ with_effect<int, Get, Set> countdown() {
       ctx.raise<Set>(i - 1);
     }
   }
+  assert(false);
 }
 
 void run(uint64_t n) {

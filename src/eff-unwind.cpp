@@ -4,6 +4,7 @@
 #include <csetjmp>
 #include <iostream>
 #include <typeindex>
+#include "fmt/core.h"
 
 thread_local std::vector<char> SAVED_STACK;
 thread_local jmp_buf SAVED_JMP;
@@ -26,14 +27,21 @@ _Unwind_Reason_Code eff_stop_fn(int version,
                                 _Unwind_Exception* exceptionObject,
                                 struct _Unwind_Context* context,
                                 void* stop_parameter) {
+  auto cursor = reinterpret_cast<unw_cursor_t*>(context);
   unw_word_t cur_fp;
-  unw_get_reg(reinterpret_cast<unw_cursor_t*>(context), UNW_AARCH64_FP,
-              &cur_fp);
-  fmt::println("unwind at fp={:#x}", cur_fp);
-  print_frames("unwind stop fn");
+  unw_get_reg(cursor, UNW_AARCH64_FP, &cur_fp);
+#ifdef EFF_UNWIND_TRACE
+  unw_word_t off;
+  unw_proc_info_t proc_info;
+  unw_get_proc_info(cursor, &proc_info);
+  char* proc_name = new char[1000];
+  unw_get_proc_name(cursor, proc_name, 1000, &off);
+  fmt::println("unwind at fp={:#x}<>{:#x} {} +{:#x}", cur_fp,
+               exceptionObject->private_2, proc_name, off);
+  delete[] proc_name;
+#endif
 
   if (cur_fp == exceptionObject->private_2) {
-    fmt::println("reaching target fp");
     auto frame_ptr = reinterpret_cast<handler_frame_found*>(
         exceptionObject->exception_cleanup);
     auto frame = *frame_ptr;
@@ -44,6 +52,11 @@ _Unwind_Reason_Code eff_stop_fn(int version,
     auto cursor = reinterpret_cast<unw_cursor_t*>(context);
     // TODO: support more complex calling conventions for >64bit values.
     unw_set_reg(cursor, UNW_AARCH64_X0, frame.set_x0);
+#ifdef EFF_UNWIND_TRACE
+    unw_word_t ip;
+    unw_get_reg(cursor, UNW_AARCH64_PC, &ip);
+    fmt::println("unwind jump to ip={:#x}", ip);
+#endif
     unw_resume(cursor);
     assert(false);
   }
@@ -58,15 +71,16 @@ void print_frames(const char* prefix) {
   unw_init_local(&cursor, &uc);
   int i = 0;
   while (unw_step(&cursor)) {
-    unw_word_t sp, ip, off;
+    unw_word_t sp, ip, fp, off;
     unw_get_reg(&cursor, UNW_AARCH64_SP, &sp);
     unw_get_reg(&cursor, UNW_AARCH64_PC, &ip);
+    unw_get_reg(&cursor, UNW_AARCH64_FP, &fp);
     unw_proc_info_t proc_info;
     unw_get_proc_info(&cursor, &proc_info);
     char* proc_name = new char[1000];
     unw_get_proc_name(&cursor, proc_name, 1000, &off);
-    fmt::println("{:16} [{}] sp={:#x} ip={:#x} {} +{:#x}", prefix, i++, sp, ip,
-                 proc_name, off);
+    fmt::println("{:16} [{}] sp={:#x} ip={:#x} fp={:#x} {} +{:#x}", prefix, i++,
+                 sp, ip, fp, proc_name, off);
     delete[] proc_name;
   }
 }

@@ -162,7 +162,6 @@ extern thread_local std::vector<char> SAVED_STACK;
 template <typename Effect>
   requires is_effect<Effect>
 bool resume_context<Effect>::resume(typename Effect::resume_t value) {
-  print_frames("resume");
   *ctx_has_resume = true;
   *ctx_resume_value = value;
   unw_word_t sp;
@@ -176,13 +175,11 @@ bool resume_context<Effect>::resume(typename Effect::resume_t value) {
   // points to the most recently pushed object on the stack, and it grows
   // downwards, towards lower addresses.
   auto sp2 = handler_frame.handler_sp;
-  fmt::println("stack range = {:#x} ~ {:#x}", sp, sp2);
   SAVED_STACK.clear();
   SAVED_STACK.resize(sp2 - sp);
   std::copy(reinterpret_cast<char*>(sp), reinterpret_cast<char*>(sp2),
             SAVED_STACK.begin());
   if (setjmp(SAVED_JMP) != 0) {
-    fmt::println("another run");
     *ctx_has_resume = false;
     return false;
   }
@@ -192,7 +189,6 @@ bool resume_context<Effect>::resume(typename Effect::resume_t value) {
 template <typename Effect, typename F>
   requires is_handler_of<Effect, F>
 __attribute__((always_inline)) auto handle(F handler) {
-  print_frames("handle");
   // The frame pointer (x29) is required for compatibility with fast stack
   // walking used by ETW and other services. It must point to the previous {x29,
   // x30} pair on the stack.
@@ -249,10 +245,8 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
   // resume is called
   if (has_resume) {
     has_resume = false;
-    fmt::println("has_resume = {}", has_resume);
     return reinterpret_cast<Effect::resume_t>(resume_value);
   }
-  fmt::println("no_resume");
 
   // resume is not called, meaning breaking
   // when break, need to do unwinding
@@ -271,10 +265,8 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
   ex->exception_cleanup =
       (decltype(ex->exception_cleanup))(new handler_frame_found(
           (*frame)->effect.name(), static_cast<unw_word_t>(result)));
-  fmt::println("before step");
   int unw_error;
   while ((unw_error = unw_step(&cur_cursor)) > 0) {
-    fmt::println("step");
     unw_proc_info_t pi;
     unw_get_proc_info(&cur_cursor, &pi);
 
@@ -283,7 +275,6 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
 
     // cannot find frame by comparing cursor, so compare by sp
     if (fp == target_fp) {
-      fmt::println("reaching fp={}, break", target_fp);
       break;
     }
 
@@ -291,13 +282,11 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
     _Unwind_Personality_Fn personality =
         reinterpret_cast<_Unwind_Personality_Fn>(pi.handler);
     if (personality != nullptr) {
-      fmt::println("call personality fn");
       _Unwind_Reason_Code personalityResult =
           personality(1, _UA_CLEANUP_PHASE, EXCEPTION_CLASS, ex.get(),
                       reinterpret_cast<struct _Unwind_Context*>(&cur_cursor));
 
       if (personalityResult == _URC_INSTALL_CONTEXT) {
-        fmt::println("unw_install_context");
         unw_resume(&cur_cursor);
       }
     }
@@ -308,29 +297,22 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
   return static_cast<typename Effect::resume_t>(NULL);
 }
 
-[[noreturn]] static void __resume_nontail(uint64_t sp) {
+static void __resume_nontail(uint64_t sp) {
   assert(!SAVED_STACK.empty());
-  fmt::println("end of stack = {:#x} - {:#x}", sp, sp + SAVED_STACK.size());
   // asm volatile("sub sp, sp, %0" : : "r"(SAVED_STACK.size()));
   std::copy(SAVED_STACK.begin(), SAVED_STACK.end(),
             reinterpret_cast<char*>(sp));
-  fmt::println("long jump");
-  longjmp(SAVED_JMP, 1);
+  // trick the compiler it may not jump and thus could return
+  static volatile bool always_jump = true;
+  if (always_jump) {
+    longjmp(SAVED_JMP, 1);
+  }
 }
 
-[[noreturn]] __attribute__((always_inline)) inline void resume_nontail() {
+__attribute__((always_inline)) inline void resume_nontail() {
   auto stack_size = SAVED_STACK.size();
   asm volatile("sub sp, sp, %0" : : "r"(stack_size));
   uint64_t sp;
   asm volatile("mov %0, sp" : "=r"(sp));
   __resume_nontail(sp);
 }
-
-// __attribute__((always_inline)) inline void resume_nontail() {
-//   uint64_t sp;
-//   asm volatile("mov %0, sp" : "=r"(sp));
-//   fmt::println("end of stack = {:#x} - {:#x}", sp - SAVED_STACK.size(), sp);
-//   std::copy(SAVED_STACK.begin(), SAVED_STACK.end(),
-//             reinterpret_cast<char*>(sp) - SAVED_STACK.size());
-//   longjmp(SAVED_JMP, 1);
-// }

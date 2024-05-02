@@ -14,30 +14,26 @@ with_effect<int, Exception> foobar() {
 }
 
 uint64_t has_handler() {
-#ifdef EFF_UNWIND_TRACE
-  uint64_t sp;
-  asm volatile("mov %0, sp" : "=r"(sp));
-  fmt::println("has_handler sp={:#x}", sp);
-  print_frames("has_handler pre");
-#endif
-
   auto guard = handle<Exception>([](uint64_t in, auto ctx) -> uint64_t {
+#ifdef EFF_UNWIND_TRACE
     print_frames("handler pre");
+#endif
     if (ctx.resume(42)) {
       return 0;
     }
+#ifdef EFF_UNWIND_TRACE
     print_frames("handler post");
-    uint64_t sp;
-    asm volatile("mov %0, sp" : "=r"(sp));
-    // print_memory(reinterpret_cast<const char*>(sp),
-    //              reinterpret_cast<const char*>(sp) + SAVED_STACK.size());
+#endif
     fmt::println("non-tail resumption");
+    if (ctx.resume(42)) {
+      return 0;
+    }
+    fmt::println("non-tail resumption2");
     return 0;
   });
   int num = 42;
   // RAII raii;
   int ret = foobar().value;
-  print_frames("has_handler post");
   resume_nontail();
 }
 
@@ -48,18 +44,16 @@ void test() {
 }
 
 int main() {
-  volatile int MAX = 1;  // '000'000;
+  volatile int MAX = 1'000'000;
   auto begin = std::chrono::high_resolution_clock::now();
 
   for (int i = 0; i < MAX; i++) {
     test();
   }
   auto end = std::chrono::high_resolution_clock::now();
-  fmt::println(
-      "{}ns    ({}ns per iteration)",
-      std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count(),
-      (int)(std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin)
-                .count() /
-            MAX));
+  auto duration_ns =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count();
+  fmt::println("{:8}ns ({}ns per iteration)", duration_ns,
+               (int)(duration_ns / MAX));
   return 0;
 }
