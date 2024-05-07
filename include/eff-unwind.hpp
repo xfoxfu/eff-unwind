@@ -71,17 +71,21 @@ template <typename Effect>
 class resume_context {
   // TODO: try zero-copy
   bool* ctx_has_resume;
+  bool* ctx_is_tail_resume;
   char* ctx_resume_value;
   handler_frame_base& handler_frame;
 
  public:
   resume_context(bool* ctx_has_resume,
+                 bool* ctx_is_tail_resume,
                  char* ctx_resume_value,
                  handler_frame_base& handler_sp)
       : ctx_has_resume(ctx_has_resume),
+        ctx_is_tail_resume(ctx_is_tail_resume),
         ctx_resume_value(ctx_resume_value),
         handler_frame(handler_sp) {}
 
+  void break_resume(Effect::resume_t value);
   bool resume(Effect::resume_t value);
 };
 
@@ -158,11 +162,21 @@ struct handler_frame : public can_handle<Effect>,
 // FIXME: non-global jmp_buf, saved stack
 extern thread_local jmp_buf SAVED_JMP;
 extern thread_local std::vector<char> SAVED_STACK;
+extern thread_local bool NO_SAVED;
+
+template <typename Effect>
+  requires is_effect<Effect>
+void resume_context<Effect>::break_resume(typename Effect::resume_t value) {
+  *ctx_has_resume = true;
+  *ctx_is_tail_resume = true;
+  *ctx_resume_value = value;
+}
 
 template <typename Effect>
   requires is_effect<Effect>
 bool resume_context<Effect>::resume(typename Effect::resume_t value) {
   *ctx_has_resume = true;
+  *ctx_is_tail_resume = false;
   *ctx_resume_value = value;
   unw_word_t sp;
   unw_cursor_t cur_cursor;
@@ -237,7 +251,7 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
     std::abort();
   }
 
-  resume_context<Effect> rctx(&has_resume,
+  resume_context<Effect> rctx(&has_resume, &NO_SAVED,
                               reinterpret_cast<char*>(&resume_value), **frame);
   auto result =
       static_cast<handler_frame_invoke<Effect>&>(**frame).invoke(in, rctx);
@@ -298,6 +312,9 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
 }
 
 static void __resume_nontail(uint64_t sp) {
+  if (NO_SAVED) {
+    return;
+  }
   assert(!SAVED_STACK.empty());
   // asm volatile("sub sp, sp, %0" : : "r"(SAVED_STACK.size()));
   std::copy(SAVED_STACK.begin(), SAVED_STACK.end(),
