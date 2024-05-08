@@ -1,6 +1,8 @@
 /**
  * Test case "counter"
  * @see https://github.com/daanx/effect-bench/blob/main/src/counter.kk
+ * This test case uses "Get" and "Set" effects to maintain a shared state.
+ * It counts down from given "n"=1000 to "0" for 1000_000 times.
  */
 #include "eff-unwind.hpp"
 #include "fmt/core.h"
@@ -11,7 +13,7 @@ struct Set : public effect<uint64_t, uint64_t> {};
 with_effect<int, Get, Set> countdown() {
   effect_ctx<int, Get, Set> ctx;
   auto i = ctx.raise<Get>(0);
-  while (i < 2000) {
+  while (true) {
     i = ctx.raise<Get>(0);
     if (i == 0) {
       return ctx.ret(i);
@@ -20,24 +22,22 @@ with_effect<int, Get, Set> countdown() {
     }
   }
   assert(false);
+  return ctx.ret(0);
 }
 
 void run(uint64_t n) {
   auto s = n;
-  auto handle_get = handle<Get>([&](uint64_t in, auto ctx) -> uint64_t {
-    ctx.break_resume(s);
-    return 0;
-  });
+  auto handle_get = handle<Get>(
+      [&](uint64_t in, auto ctx) -> uint64_t { RESUME_THEN_BREAK(s); });
   auto handle_set = handle<Set>([&](uint64_t in, auto ctx) -> uint64_t {
     s = in;
-    ctx.break_resume(s);
-    return 0;
+    RESUME_THEN_BREAK(s);
   });
   countdown();
 }
 
 int main() {
-  for (int i = 0; i < 1000; i++) {
+  for (int i = 0; i < 1'000'000; i++) {
     run(1000);
   }
   return 0;
