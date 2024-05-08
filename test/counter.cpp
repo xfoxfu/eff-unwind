@@ -1,8 +1,8 @@
 /**
  * Test case "counter"
- * @see https://github.com/daanx/effect-bench/blob/main/src/counter.kk
+ * https://github.com/effect-handlers/effect-handlers-bench/blob/main/benchmarks/koka/countdown/main.kk
  * This test case uses "Get" and "Set" effects to maintain a shared state.
- * It counts down from given "n"=1000 to "0" for 1000_000 times.
+ * It counts down from given "n"=1000 to "0" for 1_0000 times.
  */
 #include "eff-unwind.hpp"
 #include "fmt/core.h"
@@ -37,7 +37,7 @@ void run(uint64_t n) {
 }
 
 int main() {
-  for (int i = 0; i < 1'000'000; i++) {
+  for (int i = 0; i < 1'000'0; i++) {
     run(1000);
   }
   return 0;

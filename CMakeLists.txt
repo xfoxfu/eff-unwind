@@ -52,6 +52,7 @@ function(add_test BIN_NAME SRC_FILE)
 endfunction()
 
 add_test(counter "test/counter.cpp")
+add_test(fibonacci_recursive "test/fibonacci_recursive.cpp")
 
 if(EFF_UNWIND_BUILD_CPP_EFFECTS)
   add_library(cpp_effects INTERFACE)
