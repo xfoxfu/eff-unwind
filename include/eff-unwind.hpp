@@ -19,6 +19,18 @@ void print_frames(const char* prefix);
 void print_memory(const char* start, const char* end);
 #endif
 
+#define RESUME(v)  \
+  {                \
+    ctx.resume(v); \
+    return 0;      \
+  }
+#define RESUME_THEN_BREAK(v) \
+  {                          \
+    ctx.break_resume(v);     \
+    return 0;                \
+  }
+#define BREAK(v) return (v);
+
 template <typename Raise, typename Resume>
 class effect {
  public:
@@ -169,7 +181,7 @@ template <typename Effect>
 void resume_context<Effect>::break_resume(typename Effect::resume_t value) {
   *ctx_has_resume = true;
   *ctx_is_tail_resume = true;
-  *ctx_resume_value = value;
+  *reinterpret_cast<Effect::resume_t*>(ctx_resume_value) = value;
 }
 
 template <typename Effect>
@@ -177,7 +189,7 @@ template <typename Effect>
 bool resume_context<Effect>::resume(typename Effect::resume_t value) {
   *ctx_has_resume = true;
   *ctx_is_tail_resume = false;
-  *ctx_resume_value = value;
+  *reinterpret_cast<Effect::resume_t*>(ctx_resume_value) = value;
   unw_word_t sp;
   unw_cursor_t cur_cursor;
   unw_context_t uc;
@@ -259,7 +271,7 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
   // resume is called
   if (has_resume) {
     has_resume = false;
-    return reinterpret_cast<Effect::resume_t>(resume_value);
+    return *reinterpret_cast<uint64_t*>(&resume_value);
   }
 
   // resume is not called, meaning breaking
