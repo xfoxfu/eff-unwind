@@ -1,17 +1,13 @@
 cmake_minimum_required(VERSION 3.14.0)
 project(eff-unwind VERSION 0.1.0 LANGUAGES C CXX)
 
+option(EFF_UNWIND_TRACE "Include trace print to stdout" OFF)
+option(EFF_UNWIND_ASAN "Build binary with address santizer" OFF)
+option(EFF_UNWIND_BUILD_CPP_EFFECTS "Build cpp-effects test cases" OFF)
+
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_SOURCE_DIR}/cmake)
 
 Include(FetchContent)
-
-FetchContent_Declare(
-  Catch2
-  GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-  GIT_TAG        v3.3.2
-)
-
-# FetchContent_MakeAvailable(Catch2)
 
 FetchContent_Declare(
   fmt
@@ -39,58 +35,39 @@ target_compile_features(eff-unwind PUBLIC cxx_std_20)
 set_target_properties(eff-unwind PROPERTIES CXX_EXTENSIONS OFF)
 target_include_directories(eff-unwind PUBLIC include)
 target_link_libraries(eff-unwind PUBLIC scope_guard fmt::fmt)
-target_compile_definitions(eff-unwind PUBLIC _GNU_SOURCE)
-# target_compile_definitions(eff-unwind PUBLIC EFF_UNWIND_TRACE)
-
-add_executable(tests
-  "test/main.cpp"
-)
-target_compile_features(tests PRIVATE cxx_std_20)
-set_target_properties(tests PROPERTIES CXX_EXTENSIONS OFF)
-target_link_libraries(tests PRIVATE eff-unwind)
-# if(CMAKE_BUILD_TYPE MATCHES "Debug")
-#   set(
-#     CMAKE_C_FLAGS
-#     "${CMAKE_C_FLAGS} -Werror -fsanitize=undefined -fsanitize=address"
-#   )
-#   target_link_options(tests
-#     BEFORE PUBLIC -fsanitize=undefined PUBLIC -fsanitize=address
-#   )
-# endif()
+if(EFF_UNWIND_TRACE)
+  target_compile_definitions(eff-unwind PUBLIC EFF_UNWIND_TRACE)
+endif()
+if(EFF_UNWIND_ASAN)
+  target_link_options(eff-unwind
+    BEFORE PUBLIC -fsanitize=undefined PUBLIC -fsanitize=address
+  )
+endif()
 
 function(add_test BIN_NAME SRC_FILE)
   add_executable(${BIN_NAME} ${SRC_FILE})
   target_compile_features(${BIN_NAME} PRIVATE cxx_std_20)
   set_target_properties(${BIN_NAME} PROPERTIES CXX_EXTENSIONS OFF)
   target_link_libraries(${BIN_NAME} PRIVATE eff-unwind)
-  # if(CMAKE_BUILD_TYPE MATCHES "Debug")
-  # target_link_options(${BIN_NAME}
-  #   BEFORE PUBLIC -fsanitize=undefined PUBLIC -fsanitize=address
-  # )
-  # endif()
 endfunction()
 
-add_test(test_main "test/main.cpp")
-add_test(test_counter "test/counter.cpp")
-# add_test(test_counter10 "test/counter10.cpp")
-# add_test(test_mstate "test/mstate.cpp")
-# add_test(test_exception "test/exception.cpp")
-# add_test(test_noexception "test/noexception.cpp")
-add_test(test_setjmp "test/setjmp.cpp")
+add_test(counter "test/counter.cpp")
 
-add_library(cpp_effects INTERFACE)
-target_include_directories(cpp_effects INTERFACE bench/include)
-target_link_libraries(cpp_effects INTERFACE Boost::context)
+if(EFF_UNWIND_BUILD_CPP_EFFECTS)
+  add_library(cpp_effects INTERFACE)
+  target_include_directories(cpp_effects INTERFACE bench/include)
+  target_link_libraries(cpp_effects INTERFACE Boost::context)
 
-function(add_test_eff BIN_NAME SRC_FILE)
-  add_executable(${BIN_NAME} ${SRC_FILE})
-  target_compile_features(${BIN_NAME} PRIVATE cxx_std_20)
-  set_target_properties(${BIN_NAME} PROPERTIES CXX_EXTENSIONS OFF)
-  target_link_libraries(${BIN_NAME} PRIVATE cpp_effects)
-endfunction()
+  function(add_test_eff BIN_NAME SRC_FILE)
+    add_executable(${BIN_NAME} ${SRC_FILE})
+    target_compile_features(${BIN_NAME} PRIVATE cxx_std_20)
+    set_target_properties(${BIN_NAME} PROPERTIES CXX_EXTENSIONS OFF)
+    target_link_libraries(${BIN_NAME} PRIVATE cpp_effects)
+  endfunction()
 
-add_test_eff(test_eff_counter "bench/counter.cpp")
-add_test_eff(test_eff_counter10 "bench/counter10.cpp")
-add_test_eff(test_eff_mstate "bench/mstate.cpp")
-add_test_eff(test_eff_exception "bench/exception.cpp")
-add_test_eff(test_eff_noexception "bench/noexception.cpp")
+  add_test_eff(test_eff_counter "bench/counter.cpp")
+  add_test_eff(test_eff_counter10 "bench/counter10.cpp")
+  add_test_eff(test_eff_mstate "bench/mstate.cpp")
+  add_test_eff(test_eff_exception "bench/exception.cpp")
+  add_test_eff(test_eff_noexception "bench/noexception.cpp")
+endif()

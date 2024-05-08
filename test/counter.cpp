@@ -1,3 +1,7 @@
+/**
+ * Test case "counter"
+ * @see https://github.com/daanx/effect-bench/blob/main/src/counter.kk
+ */
 #include "eff-unwind.hpp"
 #include "fmt/core.h"
 
@@ -21,15 +25,13 @@ with_effect<int, Get, Set> countdown() {
 void run(uint64_t n) {
   auto s = n;
   auto handle_get = handle<Get>([&](uint64_t in, auto ctx) -> uint64_t {
-    ctx.resume(s);
+    ctx.break_resume(s);
     return 0;
   });
   auto handle_set = handle<Set>([&](uint64_t in, auto ctx) -> uint64_t {
     s = in;
-    ctx.resume(s);
+    ctx.break_resume(s);
     return 0;
-    fmt::println("non-tail resumption");
-    // API like `return ctx.resume(s)`?
   });
   countdown();
 }
