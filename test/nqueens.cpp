@@ -51,7 +51,7 @@ int run(int n) {
     BREAK(a);
   });
   place(n, n);
-  resume_nontail();
+  // resume_nontail();
   return 1;
 }
 

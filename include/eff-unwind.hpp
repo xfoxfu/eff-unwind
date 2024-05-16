@@ -212,6 +212,8 @@ bool resume_context<Effect>::resume(typename Effect::resume_t value) {
   return true;
 }
 
+__attribute__((always_inline)) inline void resume_nontail(ptrdiff_t);
+
 template <typename Effect, typename F>
   requires is_handler_of<Effect, F>
 __attribute__((always_inline)) auto handle(F handler) {
@@ -228,7 +230,22 @@ __attribute__((always_inline)) auto handle(F handler) {
       typeid(Effect), handler, *reinterpret_cast<uint64_t*>(fp), sp);
   auto frame_id = frame->id;
   frames.push_back(std::move(frame));
-  return sg::make_scope_guard([frame_id]() {
+  return sg::make_scope_guard([frame_id, sp]() {
+    if (!NO_SAVED) {
+#ifdef EFF_UNWIND_TRACE
+      print_frames("destructor");
+#endif
+
+      uint64_t nsp;
+      asm volatile("mov %0, sp" : "=r"(nsp));
+      ptrdiff_t sp_delta = nsp - sp;
+#ifdef EFF_UNWIND_TRACE
+      fmt::println("sp = {:#x}, nsp = {:#x}, sp_delta = {}", sp, nsp, sp_delta);
+#endif
+
+      resume_nontail(sp_delta);
+    }
+
     auto pop_frame_id = frames.back()->id;
 
     frames.pop_back();
@@ -331,6 +348,8 @@ static void __resume_nontail(uint64_t sp) {
   // asm volatile("sub sp, sp, %0" : : "r"(SAVED_STACK.size()));
   std::copy(SAVED_STACK.begin(), SAVED_STACK.end(),
             reinterpret_cast<char*>(sp));
+  SAVED_STACK.clear();
+  NO_SAVED = true;
   // trick the compiler it may not jump and thus could return
   static volatile bool always_jump = true;
   if (always_jump) {
@@ -338,9 +357,9 @@ static void __resume_nontail(uint64_t sp) {
   }
 }
 
-__attribute__((always_inline)) inline void resume_nontail() {
+__attribute__((always_inline)) inline void resume_nontail(ptrdiff_t sp_delta) {
   auto stack_size = SAVED_STACK.size();
-  asm volatile("sub sp, sp, %0" : : "r"(stack_size));
+  asm volatile("sub sp, sp, %0" : : "r"(stack_size + sp_delta));
   uint64_t sp;
   asm volatile("mov %0, sp" : "=r"(sp));
   __resume_nontail(sp);
