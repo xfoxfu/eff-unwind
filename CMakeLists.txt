@@ -53,6 +53,11 @@ endfunction()
 
 add_test(counter "test/counter.cpp")
 add_test(fibonacci_recursive "test/fibonacci_recursive.cpp")
+add_test(generator "test/generator.cpp")
+add_test(handler_sieve "test/handler_sieve.cpp")
+add_test(iterator "test/iterator.cpp")
+add_test(nqueens "test/nqueens.cpp")
+add_test(parsing_dollars "test/parsing_dollars.cpp")
 
 if(EFF_UNWIND_BUILD_CPP_EFFECTS)
   add_library(cpp_effects INTERFACE)

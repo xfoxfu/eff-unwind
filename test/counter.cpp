@@ -5,7 +5,6 @@
  * It counts down from given "n"=1000 to "0" for 1_0000 times.
  */
 #include "eff-unwind.hpp"
-#include "fmt/core.h"
 
 struct Get : public effect<uint64_t, uint64_t> {};
 struct Set : public effect<uint64_t, uint64_t> {};
