@@ -6,10 +6,6 @@
 #include <typeindex>
 #include "fmt/core.h"
 
-thread_local std::vector<char> SAVED_STACK;
-thread_local bool NO_SAVED = true;
-thread_local jmp_buf SAVED_JMP;
-
 thread_local uint64_t last_frame_id = 0;
 
 // TODO: add mutex guard for frame

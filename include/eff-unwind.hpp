@@ -59,8 +59,6 @@ class effect_ctx {
     requires is_effect<E> && (std::is_same<Effects, E>() || ...)
   E::resume_t raise(E::raise_t in);
 
-  // Effect::resume_t raise(Effect::raise_t in);
-
   with_effect<Return, Effects...> ret(Return val) {
     return with_effect<Return, Effects...>(*this, std::move(val));
   }
@@ -78,22 +76,21 @@ class with_effect {
 
 struct handler_frame_base;
 
+struct handler_resumption_frame;
+
 template <typename Effect>
   requires is_effect<Effect>
 class resume_context {
   // TODO: try zero-copy
   bool* ctx_has_resume;
-  bool* ctx_is_tail_resume;
   char* ctx_resume_value;
   handler_frame_base& handler_frame;
 
  public:
   resume_context(bool* ctx_has_resume,
-                 bool* ctx_is_tail_resume,
                  char* ctx_resume_value,
                  handler_frame_base& handler_sp)
       : ctx_has_resume(ctx_has_resume),
-        ctx_is_tail_resume(ctx_is_tail_resume),
         ctx_resume_value(ctx_resume_value),
         handler_frame(handler_sp) {}
 
@@ -121,11 +118,17 @@ struct handler_frame_found {
       : effect_typename(effect_typename), set_x0(set_x0) {}
 };
 
+struct handler_resumption_frame {
+  jmp_buf saved_jmp;
+  std::vector<char> saved_stack;
+};
+
 struct handler_frame_base {
   std::type_index effect;
   uint64_t id;
   uintptr_t resume_fp;
   uintptr_t handler_sp;
+  std::vector<handler_resumption_frame> resumption_frames;
 
   handler_frame_base(std::type_index effect,
                      uintptr_t resume_fp,
@@ -171,16 +174,10 @@ struct handler_frame : public can_handle<Effect>,
   }
 };
 
-// FIXME: non-global jmp_buf, saved stack
-extern thread_local jmp_buf SAVED_JMP;
-extern thread_local std::vector<char> SAVED_STACK;
-extern thread_local bool NO_SAVED;
-
 template <typename Effect>
   requires is_effect<Effect>
 void resume_context<Effect>::break_resume(typename Effect::resume_t value) {
   *ctx_has_resume = true;
-  *ctx_is_tail_resume = true;
   *reinterpret_cast<Effect::resume_t*>(ctx_resume_value) = value;
 }
 
@@ -188,7 +185,6 @@ template <typename Effect>
   requires is_effect<Effect>
 bool resume_context<Effect>::resume(typename Effect::resume_t value) {
   *ctx_has_resume = true;
-  *ctx_is_tail_resume = false;
   *reinterpret_cast<Effect::resume_t*>(ctx_resume_value) = value;
   unw_word_t sp;
   unw_cursor_t cur_cursor;
@@ -201,18 +197,25 @@ bool resume_context<Effect>::resume(typename Effect::resume_t value) {
   // points to the most recently pushed object on the stack, and it grows
   // downwards, towards lower addresses.
   auto sp2 = handler_frame.handler_sp;
-  SAVED_STACK.clear();
-  SAVED_STACK.resize(sp2 - sp);
+  handler_frame.resumption_frames.push_back(handler_resumption_frame());
+  auto& resumption_frame = handler_frame.resumption_frames.back();
+  resumption_frame.saved_stack.resize(sp2 - sp);
+#ifdef EFF_UNWIND_TRACE
+  fmt::println("saved stack = {:#x} - {:#x}", sp, sp2);
+#endif
   std::copy(reinterpret_cast<char*>(sp), reinterpret_cast<char*>(sp2),
-            SAVED_STACK.begin());
-  if (setjmp(SAVED_JMP) != 0) {
-    *ctx_has_resume = false;
+            resumption_frame.saved_stack.begin());
+  if (setjmp(resumption_frame.saved_jmp) != 0) {
+    // TODO: why remove this line does not break `test_main`?
+    // *ctx_has_resume = false;
     return false;
   }
   return true;
 }
 
-__attribute__((always_inline)) inline void resume_nontail(ptrdiff_t);
+__attribute__((always_inline)) inline void resume_nontail(
+    ptrdiff_t,
+    handler_resumption_frame*);
 
 template <typename Effect, typename F>
   requires is_handler_of<Effect, F>
@@ -231,19 +234,26 @@ __attribute__((always_inline)) auto handle(F handler) {
   auto frame_id = frame->id;
   frames.push_back(std::move(frame));
   return sg::make_scope_guard([frame_id, sp]() {
-    if (!NO_SAVED) {
 #ifdef EFF_UNWIND_TRACE
-      print_frames("destructor");
+    print_frames("destructor");
+    fmt::println("frame_count = {}", frames.back()->resumption_frames.size());
 #endif
-
+    if (frames.back()->resumption_frames.size() > 0) {
       uint64_t nsp;
       asm volatile("mov %0, sp" : "=r"(nsp));
       ptrdiff_t sp_delta = nsp - sp;
 #ifdef EFF_UNWIND_TRACE
       fmt::println("sp = {:#x}, nsp = {:#x}, sp_delta = {}", sp, nsp, sp_delta);
 #endif
+      handler_resumption_frame* frame;
+      frame = new handler_resumption_frame;
+      *frame = std::move(frames.back()->resumption_frames.back());
+#ifdef EFF_UNWIND_TRACE
+      fmt::println("resumption frame size = {:#x}", frame->saved_stack.size());
+#endif
+      frames.back()->resumption_frames.pop_back();
 
-      resume_nontail(sp_delta);
+      resume_nontail(sp_delta, frame);
     }
 
     auto pop_frame_id = frames.back()->id;
@@ -280,7 +290,7 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
     std::abort();
   }
 
-  resume_context<Effect> rctx(&has_resume, &NO_SAVED,
+  resume_context<Effect> rctx(&has_resume,
                               reinterpret_cast<char*>(&resume_value), **frame);
   auto result =
       static_cast<handler_frame_invoke<Effect>&>(**frame).invoke(in, rctx);
@@ -340,27 +350,31 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
   return static_cast<typename Effect::resume_t>(NULL);
 }
 
-static void __resume_nontail(uint64_t sp) {
-  if (NO_SAVED) {
-    return;
-  }
-  assert(!SAVED_STACK.empty());
-  // asm volatile("sub sp, sp, %0" : : "r"(SAVED_STACK.size()));
-  std::copy(SAVED_STACK.begin(), SAVED_STACK.end(),
+static void __resume_nontail(uint64_t sp, handler_resumption_frame* frame) {
+  assert(!frame.saved_stack.empty());
+  std::copy(frame->saved_stack.begin(), frame->saved_stack.end(),
             reinterpret_cast<char*>(sp));
-  SAVED_STACK.clear();
-  NO_SAVED = true;
+  frame->saved_stack.clear();
+  auto saved_jmp = frame->saved_jmp;
+  delete frame;
+#ifdef EFF_UNWIND_TRACE
+  fmt::println("restore stack = {:#x} - {:#x}", sp,
+               sp + frame->saved_stack.size());
+#endif
   // trick the compiler it may not jump and thus could return
   static volatile bool always_jump = true;
   if (always_jump) {
-    longjmp(SAVED_JMP, 1);
+    longjmp(saved_jmp, 1);
   }
 }
 
-__attribute__((always_inline)) inline void resume_nontail(ptrdiff_t sp_delta) {
-  auto stack_size = SAVED_STACK.size();
+__attribute__((always_inline)) inline void resume_nontail(
+    ptrdiff_t sp_delta,
+    handler_resumption_frame* frame) {
+  auto stack_size = frame->saved_stack.size();
+  // TODO: mov sp, %0 => more directly set sp
   asm volatile("sub sp, sp, %0" : : "r"(stack_size + sp_delta));
   uint64_t sp;
   asm volatile("mov %0, sp" : "=r"(sp));
-  __resume_nontail(sp);
+  __resume_nontail(sp, frame);
 }

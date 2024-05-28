@@ -51,6 +51,8 @@ function(add_test BIN_NAME SRC_FILE)
   target_link_libraries(${BIN_NAME} PRIVATE eff-unwind)
 endfunction()
 
+add_test(test_multi "test/micro/multi.cpp")
+add_test(test_two_raise "test/micro/two_raise.cpp")
 add_test(counter "test/counter.cpp")
 add_test(fibonacci_recursive "test/fibonacci_recursive.cpp")
 add_test(generator "test/generator.cpp")

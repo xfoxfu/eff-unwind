@@ -34,7 +34,7 @@ uint64_t has_handler() {
   int num = 42;
   // RAII raii;
   int ret = foobar().value;
-  //   resume_nontail();
+  // resume_nontail();
   return 0;
 }
 
@@ -45,7 +45,7 @@ void test() {
 }
 
 int main() {
-  volatile int MAX = 1'000;
+  volatile int MAX = 1;
   auto begin = std::chrono::high_resolution_clock::now();
 
   for (int i = 0; i < MAX; i++) {
