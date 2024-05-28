@@ -18,18 +18,14 @@ uint64_t has_handler() {
 #ifdef EFF_UNWIND_TRACE
     print_frames("handler pre");
 #endif
-    if (ctx.resume(42)) {
-      return 0;
-    }
+    RESUME(42);
 #ifdef EFF_UNWIND_TRACE
     print_frames("handler post");
 #endif
     fmt::println("non-tail resumption");
-    if (ctx.resume(42)) {
-      return 0;
-    }
+    RESUME(42);
     fmt::println("non-tail resumption2");
-    return 0;
+    BREAK(0);
   });
   int num = 42;
   // RAII raii;

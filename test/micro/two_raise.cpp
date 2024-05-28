@@ -16,9 +16,7 @@ with_effect<int, Exception> foobar() {
 
 uint64_t has_handler() {
   auto guard = handle<Exception>([](uint64_t in, auto ctx) -> uint64_t {
-    if (ctx.resume(42)) {
-      return 0;
-    }
+    RESUME(42);
     fmt::println("non-tail resumption");
     return 0;
   });

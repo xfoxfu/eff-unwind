@@ -19,10 +19,10 @@ void print_frames(const char* prefix);
 void print_memory(const char* start, const char* end);
 #endif
 
-#define RESUME(v)  \
-  {                \
-    ctx.resume(v); \
-    return 0;      \
+#define RESUME(v)      \
+  {                    \
+    if (ctx.resume(v)) \
+      return 0;        \
   }
 #define RESUME_THEN_BREAK(v) \
   {                          \

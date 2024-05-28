@@ -60,6 +60,8 @@ add_test(handler_sieve "test/handler_sieve.cpp")
 add_test(iterator "test/iterator.cpp")
 add_test(nqueens "test/nqueens.cpp")
 add_test(parsing_dollars "test/parsing_dollars.cpp")
+add_test(product_early "test/product_early.cpp")
+add_test(resume_nontail "test/resume_nontail.cpp")
 
 if(EFF_UNWIND_BUILD_CPP_EFFECTS)
   add_library(cpp_effects INTERFACE)

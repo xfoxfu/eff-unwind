@@ -36,8 +36,7 @@ with_effect<int, Prime> primes(int i, int n, int a) {
       if (e % i == 0) {
         RESUME_THEN_BREAK(false);
       } else {
-        effect_ctx<int, Prime> ctx;
-        return ctx.raise<Prime>(e);
+        return effect_ctx<int, Prime>().raise<Prime>(e);
       }
     });
     return primes(i + 1, n, a + i);
