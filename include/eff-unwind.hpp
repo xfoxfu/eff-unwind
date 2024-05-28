@@ -96,6 +96,10 @@ class resume_context {
 
   void break_resume(Effect::resume_t value);
   bool resume(Effect::resume_t value);
+
+  template <typename REffect>
+    requires is_effect<REffect>
+  REffect::resume_t raise(REffect::raise_t in);
 };
 
 // TODO: check return type of handler equal to parent function
@@ -289,6 +293,89 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
   if (frame == frames.rend()) {
     std::abort();
   }
+
+  resume_context<Effect> rctx(&has_resume,
+                              reinterpret_cast<char*>(&resume_value), **frame);
+  auto result =
+      static_cast<handler_frame_invoke<Effect>&>(**frame).invoke(in, rctx);
+
+  // resume is called
+  if (has_resume) {
+    has_resume = false;
+    return *reinterpret_cast<uint64_t*>(&resume_value);
+  }
+
+  // resume is not called, meaning breaking
+  // when break, need to do unwinding
+  // step more to get to parent function to make caller returns
+  auto target_fp = (**frame).resume_fp;
+  unw_cursor_t cur_cursor;
+  unw_context_t uc;
+  unw_getcontext(&uc);
+  unw_init_local(&cur_cursor, &uc);
+  std::unique_ptr<_Unwind_Exception> ex = std::make_unique<_Unwind_Exception>();
+  ex->exception_class = EXCEPTION_CLASS;
+  ex->private_1 = reinterpret_cast<uintptr_t>(eff_stop_fn);
+  unw_word_t sp;
+  unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &sp);
+  ex->private_2 = target_fp;
+  ex->exception_cleanup =
+      (decltype(ex->exception_cleanup))(new handler_frame_found(
+          (*frame)->effect.name(), static_cast<unw_word_t>(result)));
+  int unw_error;
+  while ((unw_error = unw_step(&cur_cursor)) > 0) {
+    unw_proc_info_t pi;
+    unw_get_proc_info(&cur_cursor, &pi);
+
+    unw_word_t fp;
+    unw_get_reg(&cur_cursor, UNW_AARCH64_FP, &fp);
+
+    // cannot find frame by comparing cursor, so compare by sp
+    if (fp == target_fp) {
+      break;
+    }
+
+    // if not break, perform cleanup
+    _Unwind_Personality_Fn personality =
+        reinterpret_cast<_Unwind_Personality_Fn>(pi.handler);
+    if (personality != nullptr) {
+      _Unwind_Reason_Code personalityResult =
+          personality(1, _UA_CLEANUP_PHASE, EXCEPTION_CLASS, ex.get(),
+                      reinterpret_cast<struct _Unwind_Context*>(&cur_cursor));
+
+      if (personalityResult == _URC_INSTALL_CONTEXT) {
+        unw_resume(&cur_cursor);
+      }
+    }
+  }
+
+  fmt::println("unreachable! = {}", unw_error);
+  assert(false);  // unreachable
+  return static_cast<typename Effect::resume_t>(NULL);
+}
+
+// FIXME: DRY!!!
+template <typename Effect>
+  requires is_effect<Effect>
+template <typename REffect>
+  requires is_effect<REffect>
+REffect::resume_t resume_context<Effect>::raise(REffect::raise_t in) {
+  // trick the compiler to generate exception tables
+  static volatile bool never_throw = false;
+  if (never_throw) {
+    throw 42;
+  }
+  auto frame =
+      std::find_if(frames.rbegin(), frames.rend(), [&](const auto& frame) {
+        return frame->effect == typeid(Effect) && frame->id < handler_frame.id;
+      });
+
+  if (frame == frames.rend()) {
+    std::abort();
+  }
+
+  bool has_resume = false;
+  char resume_value[sizeof(REffect)];
 
   resume_context<Effect> rctx(&has_resume,
                               reinterpret_cast<char*>(&resume_value), **frame);
