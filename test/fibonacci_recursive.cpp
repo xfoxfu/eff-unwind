@@ -5,6 +5,7 @@
  */
 
 #include <cstdint>
+#include <iostream>
 
 int fib(int n) {
   if (n == 0) {
@@ -16,10 +17,7 @@ int fib(int n) {
   return fib(n - 1) + fib(n - 2);
 }
 
-int main() {
-  uint64_t sum = 0;
-  for (int i = 0; i < 1'0000; i++) {
-    sum += fib(40);
-  }
-  return sum;
+int main(int, char** argv) {
+  std::cout << fib(std::stoi(argv[1])) << std::endl;
+  return 0;
 }

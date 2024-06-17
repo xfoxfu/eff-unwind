@@ -1,23 +1,24 @@
 // Test case "iterator"
 // https://github.com/effect-handlers/effect-handlers-bench/blob/main/benchmarks/koka/iterator/main.kk
 
+#include <iostream>
 #include "eff-unwind.hpp"
 
-struct Emit : public effect<int, /* actually void */ int> {};
+typedef int unit_t;
 
-with_effect</* actually void */ int, Emit> range(int l, int u) {
+struct Emit : public effect<int, unit_t> {};
+
+with_effect<unit_t, Emit> range(int l, int u) {
   effect_ctx<int, Emit> ctx;
-
-  if (l > u) {
-    return ctx.ret(0);
+  for (; l <= u; l++) {
+    ctx.raise<Emit>(l);
   }
-  ctx.raise<Emit>(l);
-  return range(l + 1, u);
+  return ctx.ret(0);
 }
 
-int run(int n) {
-  int s = 0;
-  auto g = handle<Emit>([&s](int e, auto ctx) -> /* actually void */ int {
+uint64_t run(int n) {
+  uint64_t s = 0;
+  auto g = handle<Emit>([&s](int e, auto ctx) -> unit_t {
     s += e;
     RESUME_THEN_BREAK(0);
   });
@@ -25,9 +26,8 @@ int run(int n) {
   return s;
 }
 
-int main() {
-  for (int i = 0; i < 1'0000; i++) {
-    run(1000);
-  }
+int main(int, char** argv) {
+  std::cout << run(std::stoi(argv[1])) << std::endl;
+
   return 0;
 }

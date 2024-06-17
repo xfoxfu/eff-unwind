@@ -4,6 +4,7 @@
  * This test case uses "Get" and "Set" effects to maintain a shared state.
  * It counts down from given "n"=1000 to "0" for 1_0000 times.
  */
+#include <iostream>
 #include "eff-unwind.hpp"
 
 struct Get : public effect<uint64_t, uint64_t> {};
@@ -24,7 +25,7 @@ with_effect<int, Get, Set> countdown() {
   return ctx.ret(0);
 }
 
-void run(uint64_t n) {
+int run(uint64_t n) {
   auto s = n;
   auto handle_get = handle<Get>(
       [&](uint64_t in, auto ctx) -> uint64_t { RESUME_THEN_BREAK(s); });
@@ -32,12 +33,10 @@ void run(uint64_t n) {
     s = in;
     RESUME_THEN_BREAK(s);
   });
-  countdown();
+  return countdown().value;
 }
 
-int main() {
-  for (int i = 0; i < 1'000'0; i++) {
-    run(1000);
-  }
+int main(int, char** argv) {
+  std::cout << run(std::stoi(argv[1])) << std::endl;
   return 0;
 }

@@ -2,6 +2,7 @@
 // https://github.com/effect-handlers/effect-handlers-bench/blob/main/benchmarks/koka/nqueens/main.kk
 
 #include <algorithm>
+#include <iostream>
 #include <vector>
 #include "eff-unwind.hpp"
 #include "fmt/core.h"
@@ -55,9 +56,7 @@ int run(int n) {
   return 1;
 }
 
-int main() {
-  for (int i = 0; i < 1; i++) {
-    fmt::println("{}", run(5));
-  }
+int main(int, char** argv) {
+  std::cout << run(std::stoi(argv[1])) << std::endl;
   return 0;
 }

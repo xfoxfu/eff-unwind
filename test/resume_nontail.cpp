@@ -1,6 +1,7 @@
 // parsing_dollars
 // https://github.com/effect-handlers/effect-handlers-bench/blob/main/benchmarks/koka/parsing_dollars/main.kk
 
+#include <iostream>
 #include <vector>
 #include "eff-unwind.hpp"
 #include "fmt/core.h"
@@ -29,11 +30,14 @@ int run(int n, int s) {
   return loop(n, s).value;
 }
 
-int main() {
-  int n = 1'000;
-
-  for (int i = 0; i < n; i++) {
-    run(1000, 0);
+int repeat(int n) {
+  for (int i = 0; i < 1000; i++) {
+    run(n, 0);
   }
+  return 0;
+}
+
+int main(int, char** argv) {
+  std::cout << repeat(std::stoi(argv[1])) << std::endl;
   return 0;
 }
