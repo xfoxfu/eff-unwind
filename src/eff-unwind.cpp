@@ -6,10 +6,10 @@
 #include <typeindex>
 #include "fmt/core.h"
 
-thread_local uint64_t last_frame_id = 0;
+uint64_t last_frame_id = 0;
 
 // TODO: add mutex guard for frame
-thread_local std::vector<std::unique_ptr<handler_frame_base>> frames;
+std::vector<std::unique_ptr<handler_frame_base>> frames;
 
 handler_frame_base::handler_frame_base(std::type_index effect,
                                        uintptr_t resume_fp,

@@ -156,8 +156,8 @@ template <typename Effect>
   requires is_effect<Effect>
 struct can_handle {};
 
-extern thread_local uint64_t last_frame_id;
-extern thread_local std::vector<std::unique_ptr<handler_frame_base>> frames;
+extern uint64_t last_frame_id;
+extern std::vector<std::unique_ptr<handler_frame_base>> frames;
 
 template <typename Effect, typename Handler>
   requires is_handler_of<Effect, Handler>
@@ -243,19 +243,19 @@ __attribute__((always_inline)) auto handle(F handler) {
     fmt::println("frame_count = {}", frames.back()->resumption_frames.size());
 #endif
     if (frames.back()->resumption_frames.size() > 0) {
-      uint64_t nsp;
-      asm volatile("mov %0, sp" : "=r"(nsp));
-      ptrdiff_t sp_delta = nsp - sp;
-#ifdef EFF_UNWIND_TRACE
-      fmt::println("sp = {:#x}, nsp = {:#x}, sp_delta = {}", sp, nsp, sp_delta);
-#endif
       handler_resumption_frame* frame;
       frame = new handler_resumption_frame;
       *frame = std::move(frames.back()->resumption_frames.back());
+      frames.back()->resumption_frames.pop_back();
+
+      uint64_t nsp;
+      asm volatile("mov %0, sp" : "=r"(nsp));
+      ptrdiff_t sp_delta = nsp - sp + frame->saved_stack.size();
+
 #ifdef EFF_UNWIND_TRACE
+      fmt::println("sp = {:#x}, nsp = {:#x}, sp_delta = {}", sp, nsp, sp_delta);
       fmt::println("resumption frame size = {:#x}", frame->saved_stack.size());
 #endif
-      frames.back()->resumption_frames.pop_back();
 
       resume_nontail(sp_delta, frame);
     }
@@ -302,7 +302,7 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
   // resume is called
   if (has_resume) {
     has_resume = false;
-    return *reinterpret_cast<uint64_t*>(&resume_value);
+    return *reinterpret_cast<Effect::resume_t*>(&resume_value);
   }
 
   // resume is not called, meaning breaking
@@ -367,6 +367,8 @@ REffect::resume_t resume_context<Effect>::raise(REffect::raise_t in) {
   }
   auto frame =
       std::find_if(frames.rbegin(), frames.rend(), [&](const auto& frame) {
+        // TODO: mask a part of vector since handler could register new
+        // handlers.
         return frame->effect == typeid(Effect) && frame->id < handler_frame.id;
       });
 
@@ -385,7 +387,7 @@ REffect::resume_t resume_context<Effect>::raise(REffect::raise_t in) {
   // resume is called
   if (has_resume) {
     has_resume = false;
-    return *reinterpret_cast<uint64_t*>(&resume_value);
+    return *reinterpret_cast<Effect::resume_t*>(&resume_value);
   }
 
   // resume is not called, meaning breaking
@@ -438,7 +440,7 @@ REffect::resume_t resume_context<Effect>::raise(REffect::raise_t in) {
 }
 
 static void __resume_nontail(uint64_t sp, handler_resumption_frame* frame) {
-  assert(!frame.saved_stack.empty());
+  assert(!frame->saved_stack.empty());
   std::copy(frame->saved_stack.begin(), frame->saved_stack.end(),
             reinterpret_cast<char*>(sp));
   frame->saved_stack.clear();
@@ -458,9 +460,7 @@ static void __resume_nontail(uint64_t sp, handler_resumption_frame* frame) {
 __attribute__((always_inline)) inline void resume_nontail(
     ptrdiff_t sp_delta,
     handler_resumption_frame* frame) {
-  auto stack_size = frame->saved_stack.size();
-  // TODO: mov sp, %0 => more directly set sp
-  asm volatile("sub sp, sp, %0" : : "r"(stack_size + sp_delta));
+  asm volatile("sub sp, sp, %0" : : "r"(sp_delta));
   uint64_t sp;
   asm volatile("mov %0, sp" : "=r"(sp));
   __resume_nontail(sp, frame);
