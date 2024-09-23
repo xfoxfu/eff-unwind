@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.14.0)
 project(eff-unwind VERSION 0.1.0 LANGUAGES C CXX)
+cmake_policy(SET CMP0167 NEW)
 
 option(EFF_UNWIND_TRACE "Include trace print to stdout" OFF)
 option(EFF_UNWIND_ASAN "Build binary with address santizer" OFF)
@@ -12,7 +13,7 @@ Include(FetchContent)
 FetchContent_Declare(
   fmt
   GIT_REPOSITORY  https://github.com/fmtlib/fmt.git
-  GIT_TAG         10.1.1
+  GIT_TAG         11.0.2
 )
 FetchContent_MakeAvailable(fmt)
 
@@ -21,7 +22,7 @@ FetchContent_Declare(
   GIT_REPOSITORY  https://github.com/ricab/scope_guard.git
   GIT_TAG         v1.1.0
 )
-FetchContent_Populate(scope_guard)
+FetchContent_MakeAvailable(scope_guard)
 add_library(scope_guard INTERFACE)
 target_include_directories(scope_guard INTERFACE ${scope_guard_SOURCE_DIR})
 
@@ -43,6 +44,12 @@ if(EFF_UNWIND_ASAN)
     BEFORE PUBLIC -fsanitize=undefined PUBLIC -fsanitize=address
   )
 endif()
+if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang"
+  AND "${CMAKE_CXX_COMPILER_VERSION}" VERSION_GREATER_EQUAL "16"
+  AND "${CMAKE_CXX_COMPILER_VERSION}" VERSION_LESS "19")
+  target_compile_definitions(eff-unwind PUBLIC EFF_UNWIND_CONCEPT_CLANG_WORKAROUND)
+endif()
+
 
 function(add_test BIN_NAME SRC_FILE)
   add_executable(${BIN_NAME} ${SRC_FILE})

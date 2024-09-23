@@ -40,7 +40,10 @@ class effect {
 
 template <typename T>
 concept is_effect =
-    std::is_base_of<effect<typename T::raise_t, typename T::resume_t>, T>();
+    std::is_base_of_v<effect<typename T::raise_t, typename T::resume_t>, T>;
+
+template <typename Effect, typename... Effects>
+concept is_one_of = (std::is_same_v<Effect, Effects> || ...);
 
 template <typename Return, typename... Effects>
   requires(is_effect<Effects> && ...)
@@ -56,7 +59,9 @@ class effect_ctx {
   typedef Return return_t;
 
   template <typename E>
-    requires is_effect<E> && (std::is_same<Effects, E>() || ...)
+#ifndef EFF_UNWIND_CONCEPT_CLANG_WORKAROUND
+    requires(std::is_same_v<E, Effects> || ...)
+#endif
   E::resume_t raise(E::raise_t in);
 
   with_effect<Return, Effects...> ret(Return val) {
@@ -105,8 +110,9 @@ class resume_context {
 // TODO: check return type of handler equal to parent function
 template <typename Effect, typename F>
 concept is_handler_of =
-    is_effect<Effect> &&
-    std::is_invocable<F, typename Effect::resume_t, resume_context<Effect>>();
+    is_effect<Effect> && std::is_invocable<F,
+                                           typename Effect::resume_t,
+                                           resume_context<Effect>>::value;
 
 template <typename Effect, typename F>
   requires is_handler_of<Effect, F>
@@ -276,11 +282,13 @@ _Unwind_Reason_Code eff_stop_fn(int version,
                                 struct _Unwind_Context* context,
                                 void* stop_parameter);
 
-template <typename Value, typename... Effects>
+template <typename Return, typename... Effects>
   requires(is_effect<Effects> && ...)
-template <typename Effect>
-  requires is_effect<Effect> && (std::is_same<Effects, Effect>() || ...)
-Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
+template <typename E>
+#ifndef EFF_UNWIND_CONCEPT_CLANG_WORKAROUND
+  requires(std::is_same_v<E, Effects> || ...)
+#endif
+E::resume_t effect_ctx<Return, Effects...>::raise(E::raise_t in) {
   // trick the compiler to generate exception tables
   static volatile bool never_throw = false;
   if (never_throw) {
@@ -288,21 +296,20 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
   }
   auto frame = std::find_if(
       frames.rbegin(), frames.rend(),
-      [&](const auto& frame) { return frame->effect == typeid(Effect); });
+      [&](const auto& frame) { return frame->effect == typeid(E); });
 
   if (frame == frames.rend()) {
     std::abort();
   }
 
-  resume_context<Effect> rctx(&has_resume,
-                              reinterpret_cast<char*>(&resume_value), **frame);
-  auto result =
-      static_cast<handler_frame_invoke<Effect>&>(**frame).invoke(in, rctx);
+  resume_context<E> rctx(&has_resume, reinterpret_cast<char*>(&resume_value),
+                         **frame);
+  auto result = static_cast<handler_frame_invoke<E>&>(**frame).invoke(in, rctx);
 
   // resume is called
   if (has_resume) {
     has_resume = false;
-    return *reinterpret_cast<Effect::resume_t*>(&resume_value);
+    return *reinterpret_cast<E::resume_t*>(&resume_value);
   }
 
   // resume is not called, meaning breaking
@@ -351,7 +358,7 @@ Effect::resume_t effect_ctx<Value, Effects...>::raise(Effect::raise_t in) {
 
   fmt::println("unreachable! = {}", unw_error);
   assert(false);  // unreachable
-  return static_cast<typename Effect::resume_t>(NULL);
+  return static_cast<typename E::resume_t>(NULL);
 }
 
 // FIXME: DRY!!!
