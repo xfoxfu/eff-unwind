@@ -26,8 +26,6 @@ uint64_t has_handler() {
 }
 
 void test() {
-  // FIXME: if Release mode is specified, cannot be handled correctly
-  // need to tell the C++ optimizer that return value is not a constant
   auto val = has_handler();
 }
 

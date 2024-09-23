@@ -1,6 +1,7 @@
 // parsing_dollars
 // https://github.com/effect-handlers/effect-handlers-bench/blob/main/benchmarks/koka/parsing_dollars/main.kk
 
+#include <iostream>
 #include "eff-unwind.hpp"
 #include "fmt/core.h"
 
@@ -25,49 +26,57 @@ bool is_dollar(char_t c) {
   return c == 36;
 }
 
-with_effect<unit_t, Read, Emit, Stop> parse(int a) {
+with_effect<unit_t, Read, Emit, Stop> parse() {
   effect_ctx<unit_t, Read, Emit, Stop> ctx;
-  auto c = ctx.raise<Read>(0);
-  if (is_dollar(c)) {
-    parse(a + 1);
-  } else if (is_newline(c)) {
-    ctx.raise<Emit>(a);
-    parse(0);
-  } else {
-    ctx.raise<Stop>(0);
+  int a = 0;
+  char_t c;
+  while ((c = ctx.raise<Read>(0))) {
+    if (is_dollar(c)) {
+      a += 1;
+    } else if (is_newline(c)) {
+      ctx.raise<Emit>(a);
+      a = 0;
+    } else {
+      ctx.raise<Stop>(0);
+    }
   }
-  fmt::println("unreachable! = parse");
-  abort();
+  return ctx.ret(0);  // unreachable
 }
 
-unit_t run(int n) {
-  int s = 0;
-  auto g1 = handle<Emit>([&s](int e, auto ctx) -> unit_t {
-    s += e;
-    RESUME(0);
-  });
-  auto g2 = handle<Stop>([](auto _, auto ctx) -> unit_t { BREAK(0); });
+void feed(int n) {
   int i = 0, j = 0;
-  auto g3 = handle<Read>([&i, &j, &n](auto _, auto ctx) -> unit_t {
+  auto g = handle<Read>([&i, &j, &n](auto _, auto ctx) -> unit_t {
     if (i > n) {
       effect_ctx<unit_t, Stop>().raise<Stop>(0);
     } else if (j == 0) {
       i += 1;
       j = i;
-      RESUME(newline());
+      RESUME_THEN_BREAK(newline());
     } else {
       j -= 1;
-      RESUME(dollar());
+      RESUME_THEN_BREAK(dollar());
     }
   });
-  // resume_nontail();
-  fmt::println("unreachable! = run");
-  abort();
+  parse();
 }
 
-int main() {
-  for (int i = 0; i < 10; i++) {
-    run(10);
-  }
+void catchh(int n) {
+  auto g = handle<Stop>([](auto _, auto ctx) -> unit_t { BREAK(0); });
+  feed(n);
+}
+
+uint32_t sum(int n) {
+  int s = 0;
+  auto g = handle<Emit>([&s](int e, auto ctx) -> unit_t {
+    s += e;
+    RESUME_THEN_BREAK(0);
+  });
+  catchh(n);
+  fmt::println("after catchh");
+  return s;
+}
+
+int main(int, char** argv) {
+  std::cout << sum(std::stoi(argv[1])) << std::endl;
   return 0;
 }

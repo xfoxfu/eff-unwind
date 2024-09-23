@@ -1,7 +1,6 @@
 // Test case "nqueens"
 // https://github.com/effect-handlers/effect-handlers-bench/blob/main/benchmarks/koka/nqueens/main.kk
 
-#include <algorithm>
 #include <iostream>
 #include <vector>
 #include "eff-unwind.hpp"

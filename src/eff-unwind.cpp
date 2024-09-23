@@ -53,6 +53,14 @@ _Unwind_Reason_Code eff_stop_fn(int version,
     unw_word_t ip;
     unw_get_reg(cursor, UNW_AARCH64_PC, &ip);
     fmt::println("unwind jump to ip={:#x}", ip);
+
+    unw_proc_info_t proc_info;
+    unw_get_proc_info(cursor, &proc_info);
+    char* proc_name = new char[1000];
+    unw_get_proc_name(cursor, proc_name, 1000, &off);
+    fmt::println("target function: {} +{:#x}", cur_fp,
+                 exceptionObject->private_2, proc_name, off);
+    delete[] proc_name;
 #endif
     unw_resume(cursor);
     assert(false);
