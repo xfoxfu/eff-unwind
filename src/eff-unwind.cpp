@@ -1,8 +1,5 @@
 #include "eff-unwind.hpp"
 #include <libunwind.h>
-#include <sys/_types/_uintptr_t.h>
-#include <csetjmp>
-#include <iostream>
 #include <typeindex>
 #include "fmt/core.h"
 

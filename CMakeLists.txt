@@ -69,6 +69,8 @@ add_test(iterator "test/iterator.cpp")
 add_test(nqueens "test/nqueens.cpp")
 add_test(parsing_dollars "test/parsing_dollars.cpp")
 add_test(resume_nontail "test/resume_nontail.cpp")
+# add_test(tree_explore "test/tree_explore.cpp")
+add_test(triples "test/triples.cpp")
 
 if(EFF_UNWIND_BUILD_CPP_EFFECTS)
   add_library(cpp_effects INTERFACE)

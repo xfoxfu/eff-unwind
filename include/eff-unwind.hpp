@@ -1,15 +1,12 @@
 #include <libunwind.h>
 #include <unwind.h>
 #include <unwind_itanium.h>
-#include <any>
 #include <cassert>
 #include <csetjmp>
 #include <cstddef>
-#include <functional>
-#include <optional>
 #include <type_traits>
 #include <typeindex>
-#include <variant>
+#include <vector>
 #include "fmt/core.h"
 #include "scope_guard.hpp"
 
@@ -118,6 +115,9 @@ template <typename Effect, typename F>
   requires is_handler_of<Effect, F>
 auto handle(F handler);
 
+// FIXME: support more data types
+void set_resumption_value(uint64_t value);
+
 // ===== implementation =====
 
 struct handler_frame_found {
@@ -211,6 +211,7 @@ bool resume_context<Effect>::resume(typename Effect::resume_t value) {
   auto& resumption_frame = handler_frame.resumption_frames.back();
   resumption_frame.saved_stack.resize(sp2 - sp);
 #ifdef EFF_UNWIND_TRACE
+  print_frames("save_stack");
   fmt::println("saved stack = {:#x} - {:#x}", sp, sp2);
 #endif
   std::copy(reinterpret_cast<char*>(sp), reinterpret_cast<char*>(sp2),
@@ -299,6 +300,9 @@ E::resume_t effect_ctx<Return, Effects...>::raise(E::raise_t in) {
       [&](const auto& frame) { return frame->effect == typeid(E); });
 
   if (frame == frames.rend()) {
+#ifdef EFF_UNWIND_TRACE
+    fmt::println("reached frame end, handler not found, aborting");
+#endif
     std::abort();
   }
 
@@ -356,6 +360,7 @@ E::resume_t effect_ctx<Return, Effects...>::raise(E::raise_t in) {
     }
   }
 
+  // TODO: this should not panic. It means no cleanup is found. Just jump.
   fmt::println("unreachable! = {}", unw_error);
   assert(false);  // unreachable
   return static_cast<typename E::resume_t>(NULL);
