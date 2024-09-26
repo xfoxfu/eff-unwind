@@ -1,5 +1,6 @@
 #include <_abort.h>
 #include <libunwind.h>
+#include <sys/cdefs.h>
 #include <unwind.h>
 #include <unwind_itanium.h>
 #include <cassert>
@@ -126,7 +127,7 @@ concept is_handler_of_in_fn = is_effect<Effect> &&
 
 template <typename Effect, typename F>
   requires is_handler_of<Effect, F>
-auto handle(F handler);
+auto __deprecated_handle(F handler);
 
 template <typename Return, typename F, typename Effect, typename H>
   requires(is_effect<Effect> && is_handler_of_in_fn<Effect, Return, H>)
@@ -243,7 +244,7 @@ __attribute__((always_inline)) inline void resume_nontail(ptrdiff_t,
 
 template <typename Effect, typename F>
   requires is_handler_of<Effect, F>
-__attribute__((always_inline)) auto handle(F handler) {
+__attribute__((always_inline)) auto __deprecated_handle(F handler) {
   // The frame pointer (x29) is required for compatibility with fast stack
   // walking used by ETW and other services. It must point to the previous {x29,
   // x30} pair on the stack.
@@ -309,24 +310,24 @@ Return do_handle(F doo, H handler) {
   print_frames("destructor");
   fmt::println("frame_count = {}", frames.back()->resumption_frames.size());
 #endif
-  //   if (frames.back()->resumption_frames.size() > 0) {
-  //     handler_resumption_frame* frame;
-  //     frame = new handler_resumption_frame;
-  //     *frame = std::move(frames.back()->resumption_frames.back());
-  //     frames.back()->resumption_frames.pop_back();
-  //
-  //     uint64_t nsp;
-  //     asm volatile("mov %0, sp" : "=r"(nsp));
-  //     ptrdiff_t sp_delta = nsp - sp + frame->saved_stack.size();
-  //
-  // #ifdef EFF_UNWIND_TRACE
-  //     fmt::println("sp = {:#x}, nsp = {:#x}, sp_delta = {}", sp, nsp,
-  //     sp_delta); fmt::println("resumption frame size = {:#x}",
-  //     frame->saved_stack.size());
-  // #endif
-  //
-  //     resume_nontail(sp_delta, frame);
-  //   }
+  if (frames.back()->resumption_frames.size() > 0) {
+    handler_resumption_frame* frame;
+    frame = new handler_resumption_frame;
+    *frame = std::move(frames.back()->resumption_frames.back());
+    frames.back()->resumption_frames.pop_back();
+
+    uint64_t nsp;
+    asm volatile("mov %0, sp" : "=r"(nsp));
+    ptrdiff_t sp_delta = nsp - sp + frame->saved_stack.size();
+
+#ifdef EFF_UNWIND_TRACE
+    fmt::println(
+        "sp = {:#x}, nsp = {:#x}, sp_delta = {:#x}", sp, nsp, sp_delta);
+    fmt::println("resumption frame size = {:#x}", frame->saved_stack.size());
+#endif
+
+    resume_nontail(sp_delta, frame);
+  }
 
   auto pop_frame_id = frames.back()->id;
 
@@ -517,15 +518,16 @@ REffect::resume_t resume_context<Effect>::raise(REffect::raise_t in) {
 
 static void __resume_nontail(uint64_t sp, handler_resumption_frame* frame) {
   assert(!frame->saved_stack.empty());
+#ifdef EFF_UNWIND_TRACE
+  fmt::println("restore stack = {:#x} - {:#x} ({:#x})", sp,
+      sp + frame->saved_stack.size(), frame->saved_stack.size());
+#endif
   std::copy(frame->saved_stack.begin(), frame->saved_stack.end(),
       reinterpret_cast<char*>(sp));
   frame->saved_stack.clear();
-  auto saved_jmp = frame->saved_jmp;
+  jmp_buf saved_jmp;
+  std::copy(frame->saved_jmp, frame->saved_jmp + sizeof(jmp_buf), saved_jmp);
   delete frame;
-#ifdef EFF_UNWIND_TRACE
-  fmt::println(
-      "restore stack = {:#x} - {:#x}", sp, sp + frame->saved_stack.size());
-#endif
   // trick the compiler it may not jump and thus could return
   static volatile bool always_jump = true;
   if (always_jump) {

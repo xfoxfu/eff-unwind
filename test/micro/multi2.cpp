@@ -1,4 +1,3 @@
-#include <sys/cdefs.h>
 #include "eff-unwind.hpp"
 #include "fmt/core.h"
 
@@ -15,8 +14,15 @@ with_effect<int, Exception> foobar() {
 }
 
 uint64_t has_handler() {
-  auto guard =
-      __deprecated_handle<Exception>([](uint64_t in, auto ctx) -> uint64_t {
+  return do_handle<uint64_t, Exception>(
+      []() {
+        int num = 42;
+        // RAII raii;
+        int ret = foobar().value;
+        // resume_nontail();
+        return 0;
+      },
+      [](uint64_t in, auto ctx, auto yield) -> uint64_t {
 #ifdef EFF_UNWIND_TRACE
         print_frames("handler pre");
 #endif
@@ -29,11 +35,6 @@ uint64_t has_handler() {
         fmt::println("non-tail resumption2");
         BREAK(0);
       });
-  int num = 42;
-  // RAII raii;
-  int ret = foobar().value;
-  // resume_nontail();
-  return 0;
 }
 
 void test() {
