@@ -5,6 +5,7 @@
 #include <cassert>
 #include <csetjmp>
 #include <cstddef>
+#include <functional>
 #include <type_traits>
 #include <typeindex>
 #include <vector>
@@ -108,18 +109,27 @@ class resume_context {
   REffect::resume_t raise(REffect::raise_t in);
 };
 
-// TODO: check return type of handler equal to parent function
+template <typename Yield>
+class yield_context {};
+
 template <typename Effect, typename F>
-concept is_handler_of = is_effect<Effect> && std::is_invocable<F,
-                                                 typename Effect::resume_t,
-                                                 resume_context<Effect>>::value;
+concept is_handler_of = is_effect<Effect> &&
+    std::is_invocable<F, typename Effect::resume_t, resume_context<Effect>>::
+        value;
+
+template <typename Effect, typename Yield, typename F>
+concept is_handler_of_in_fn = is_effect<Effect> &&
+    std::is_invocable<F,
+        typename Effect::resume_t,
+        resume_context<Effect>,
+        Yield>::value;
 
 template <typename Effect, typename F>
   requires is_handler_of<Effect, F>
 auto handle(F handler);
 
 template <typename Return, typename F, typename Effect, typename H>
-  requires(is_effect<Effect>)
+  requires(is_effect<Effect> && is_handler_of_in_fn<Effect, Return, H>)
 Return do_handle(F doo, H handler);
 
 // ===== implementation =====
@@ -278,15 +288,18 @@ __attribute__((always_inline)) auto handle(F handler) {
 }
 
 template <typename Return, typename Effect, typename F, typename H>
-  requires(is_effect<Effect>)
+  requires(is_effect<Effect> && is_handler_of_in_fn<Effect, Return, H>)
 Return do_handle(F doo, H handler) {
   uint64_t fp;
   asm volatile("mov %0, fp" : "=r"(fp));
   uint64_t sp;
   asm volatile("mov %0, sp" : "=r"(sp));
 
-  auto frame = std::make_unique<handler_frame<Effect, H>>(
-      typeid(Effect), handler, *reinterpret_cast<uint64_t*>(fp), sp);
+  yield_context<Return> yctx;
+  auto handler_ =
+      std::bind(handler, std::placeholders::_1, std::placeholders::_2, yctx);
+  auto frame = std::make_unique<handler_frame<Effect, decltype(handler_)>>(
+      typeid(Effect), handler_, *reinterpret_cast<uint64_t*>(fp), sp);
   auto frame_id = frame->id;
   frames.push_back(std::move(frame));
 

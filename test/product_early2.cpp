@@ -40,7 +40,7 @@ with_effect<unit_t, Abort> product(std::vector<int>::const_iterator xs_begin,
 int run_product(std::vector<int>& xs) {
   return do_handle<int, Abort>(
       [&]() { return product(xs.begin(), xs.end()).value; },
-      [](auto r, auto ctx) -> unit_t { BREAK(r); });
+      [](auto r, auto ctx, auto yctx) -> unit_t { BREAK(r); });
 }
 
 unit_t run(int n) {

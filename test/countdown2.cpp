@@ -31,12 +31,12 @@ int run(uint64_t n) {
   return do_handle<int, Get>(
       [&]() -> int {
         return do_handle<int, Set>([]() -> int { return countdown().value; },
-            [&](uint64_t in, auto ctx) -> uint64_t {
+            [&](uint64_t in, auto ctx, auto b) -> uint64_t {
               s = in;
               RESUME_THEN_BREAK(s);
             });
       },
-      [&](uint64_t in, auto ctx) -> uint64_t { RESUME_THEN_BREAK(s); });
+      [&](uint64_t in, auto ctx, auto b) -> uint64_t { RESUME_THEN_BREAK(s); });
 }
 
 int main(int, char** argv) {

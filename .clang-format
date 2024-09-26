@@ -1,3 +1,4 @@
 ---
 BasedOnStyle: Chromium
 AlignAfterOpenBracket: DontAlign
+AlignOperands: DontAlign
