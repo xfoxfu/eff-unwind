@@ -48,7 +48,7 @@ int main() {
   auto end = std::chrono::high_resolution_clock::now();
   auto duration_ns =
       std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count();
-  fmt::println("{:8}ns ({}ns per iteration)", duration_ns,
-               (int)(duration_ns / MAX));
+  fmt::println(
+      "{:8}ns ({}ns per iteration)", duration_ns, (int)(duration_ns / MAX));
   return 0;
 }

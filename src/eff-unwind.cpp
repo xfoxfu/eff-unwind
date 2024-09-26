@@ -10,18 +10,18 @@ uint64_t last_frame_id = 0;
 std::vector<std::unique_ptr<handler_frame_base>> frames;
 
 handler_frame_base::handler_frame_base(std::type_index effect,
-                                       uintptr_t resume_fp,
-                                       uintptr_t handler_sp)
+    uintptr_t resume_fp,
+    uintptr_t handler_sp)
     : effect(effect), resume_fp(resume_fp), handler_sp(handler_sp) {
   id = last_frame_id++;
 }
 
 _Unwind_Reason_Code eff_stop_fn(int version,
-                                _Unwind_Action actions,
-                                _Unwind_Exception_Class exceptionClass,
-                                _Unwind_Exception* exceptionObject,
-                                struct _Unwind_Context* context,
-                                void* stop_parameter) {
+    _Unwind_Action actions,
+    _Unwind_Exception_Class exceptionClass,
+    _Unwind_Exception* exceptionObject,
+    struct _Unwind_Context* context,
+    void* stop_parameter) {
   auto cursor = reinterpret_cast<unw_cursor_t*>(context);
   unw_word_t cur_fp;
   unw_get_reg(cursor, UNW_AARCH64_FP, &cur_fp);
@@ -32,7 +32,7 @@ _Unwind_Reason_Code eff_stop_fn(int version,
   char* proc_name = new char[1000];
   unw_get_proc_name(cursor, proc_name, 1000, &off);
   fmt::println("unwind at fp={:#x}<>{:#x} {} +{:#x}", cur_fp,
-               exceptionObject->private_2, proc_name, off);
+      exceptionObject->private_2, proc_name, off);
   delete[] proc_name;
 #endif
 
@@ -57,7 +57,7 @@ _Unwind_Reason_Code eff_stop_fn(int version,
     char* proc_name = new char[1000];
     unw_get_proc_name(cursor, proc_name, 1000, &off);
     fmt::println("target function: {} +{:#x}", cur_fp,
-                 exceptionObject->private_2, proc_name, off);
+        exceptionObject->private_2, proc_name, off);
     delete[] proc_name;
 #endif
     unw_resume(cursor);
@@ -83,14 +83,14 @@ void print_frames(const char* prefix) {
     char* proc_name = new char[1000];
     unw_get_proc_name(&cursor, proc_name, 1000, &off);
     fmt::println("{:16} [{}] sp={:#x} ip={:#x} fp={:#x} {} +{:#x}", prefix, i++,
-                 sp, ip, fp, proc_name, off);
+        sp, ip, fp, proc_name, off);
     delete[] proc_name;
   }
 }
 
 void print_memory(const char* start, const char* end) {
   fmt::println("stack over {:#x}-{:#x}", reinterpret_cast<uintptr_t>(start),
-               reinterpret_cast<uintptr_t>(end));
+      reinterpret_cast<uintptr_t>(end));
   for (auto i = start; i < end; i++) {
     fmt::print("{:02x}", *i);
     if ((i - start + 1) % 8 == 0) {

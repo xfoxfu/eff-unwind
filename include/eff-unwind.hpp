@@ -94,8 +94,8 @@ class resume_context {
 
  public:
   resume_context(bool* ctx_has_resume,
-                 char* ctx_resume_value,
-                 handler_frame_base& handler_sp)
+      char* ctx_resume_value,
+      handler_frame_base& handler_sp)
       : ctx_has_resume(ctx_has_resume),
         ctx_resume_value(ctx_resume_value),
         handler_frame(handler_sp) {}
@@ -110,10 +110,9 @@ class resume_context {
 
 // TODO: check return type of handler equal to parent function
 template <typename Effect, typename F>
-concept is_handler_of =
-    is_effect<Effect> && std::is_invocable<F,
-                                           typename Effect::resume_t,
-                                           resume_context<Effect>>::value;
+concept is_handler_of = is_effect<Effect> && std::is_invocable<F,
+                                                 typename Effect::resume_t,
+                                                 resume_context<Effect>>::value;
 
 template <typename Effect, typename F>
   requires is_handler_of<Effect, F>
@@ -146,8 +145,8 @@ struct handler_frame_base {
   std::vector<handler_resumption_frame> resumption_frames;
 
   handler_frame_base(std::type_index effect,
-                     uintptr_t resume_fp,
-                     uintptr_t handler_sp);
+      uintptr_t resume_fp,
+      uintptr_t handler_sp);
 
   virtual ~handler_frame_base() {}
 };
@@ -155,12 +154,12 @@ struct handler_frame_base {
 template <typename Effect>
 struct handler_frame_invoke : public handler_frame_base {
   handler_frame_invoke(std::type_index effect,
-                       uintptr_t resume_fp,
-                       uintptr_t handler_sp)
+      uintptr_t resume_fp,
+      uintptr_t handler_sp)
       : handler_frame_base(effect, resume_fp, handler_sp) {}
 
   virtual Effect::resume_t invoke(Effect::raise_t in,
-                                  resume_context<Effect> ctx) = 0;
+      resume_context<Effect> ctx) = 0;
 };
 
 template <typename Effect>
@@ -177,14 +176,14 @@ struct handler_frame : public can_handle<Effect>,
   Handler handler;
 
   handler_frame(std::type_index effect,
-                Handler handler,
-                uintptr_t resume_fp,
-                uintptr_t handler_sp)
+      Handler handler,
+      uintptr_t resume_fp,
+      uintptr_t handler_sp)
       : handler_frame_invoke<Effect>(effect, resume_fp, handler_sp),
         handler(handler) {}
 
   virtual Effect::resume_t invoke(Effect::raise_t in,
-                                  resume_context<Effect> ctx) {
+      resume_context<Effect> ctx) {
     return handler(in, ctx);
   }
 };
@@ -220,7 +219,7 @@ bool resume_context<Effect>::resume(typename Effect::resume_t value) {
   fmt::println("saved stack = {:#x} - {:#x}", sp, sp2);
 #endif
   std::copy(reinterpret_cast<char*>(sp), reinterpret_cast<char*>(sp2),
-            resumption_frame.saved_stack.begin());
+      resumption_frame.saved_stack.begin());
   if (setjmp(resumption_frame.saved_jmp) != 0) {
     // TODO: why remove this line does not break `test_main`?
     // *ctx_has_resume = false;
@@ -229,8 +228,7 @@ bool resume_context<Effect>::resume(typename Effect::resume_t value) {
   return true;
 }
 
-__attribute__((always_inline)) inline void resume_nontail(
-    ptrdiff_t,
+__attribute__((always_inline)) inline void resume_nontail(ptrdiff_t,
     handler_resumption_frame*);
 
 template <typename Effect, typename F>
@@ -328,11 +326,11 @@ Return do_handle(F doo, H handler) {
 constexpr _Unwind_Exception_Class EXCEPTION_CLASS = 0x58464f5845480000;
 
 _Unwind_Reason_Code eff_stop_fn(int version,
-                                _Unwind_Action actions,
-                                _Unwind_Exception_Class exceptionClass,
-                                _Unwind_Exception* exceptionObject,
-                                struct _Unwind_Context* context,
-                                void* stop_parameter);
+    _Unwind_Action actions,
+    _Unwind_Exception_Class exceptionClass,
+    _Unwind_Exception* exceptionObject,
+    struct _Unwind_Context* context,
+    void* stop_parameter);
 
 template <typename Return, typename... Effects>
   requires(is_effect<Effects> && ...)
@@ -346,8 +344,7 @@ E::resume_t effect_ctx<Return, Effects...>::raise(E::raise_t in) {
   if (never_throw) {
     throw 42;
   }
-  auto frame = std::find_if(
-      frames.rbegin(), frames.rend(),
+  auto frame = std::find_if(frames.rbegin(), frames.rend(),
       [&](const auto& frame) { return frame->effect == typeid(E); });
 
   if (frame == frames.rend()) {
@@ -357,8 +354,8 @@ E::resume_t effect_ctx<Return, Effects...>::raise(E::raise_t in) {
     std::abort();
   }
 
-  resume_context<E> rctx(&has_resume, reinterpret_cast<char*>(&resume_value),
-                         **frame);
+  resume_context<E> rctx(
+      &has_resume, reinterpret_cast<char*>(&resume_value), **frame);
   auto result = static_cast<handler_frame_invoke<E>&>(**frame).invoke(in, rctx);
 
   // resume is called
@@ -403,7 +400,7 @@ E::resume_t effect_ctx<Return, Effects...>::raise(E::raise_t in) {
     if (personality != nullptr) {
       _Unwind_Reason_Code personalityResult =
           personality(1, _UA_CLEANUP_PHASE, EXCEPTION_CLASS, ex.get(),
-                      reinterpret_cast<struct _Unwind_Context*>(&cur_cursor));
+              reinterpret_cast<struct _Unwind_Context*>(&cur_cursor));
 
       if (personalityResult == _URC_INSTALL_CONTEXT) {
         unw_resume(&cur_cursor);
@@ -445,8 +442,8 @@ REffect::resume_t resume_context<Effect>::raise(REffect::raise_t in) {
   bool has_resume = false;
   char resume_value[sizeof(REffect)];
 
-  resume_context<Effect> rctx(&has_resume,
-                              reinterpret_cast<char*>(&resume_value), **frame);
+  resume_context<Effect> rctx(
+      &has_resume, reinterpret_cast<char*>(&resume_value), **frame);
   auto result =
       static_cast<handler_frame_invoke<Effect>&>(**frame).invoke(in, rctx);
 
@@ -492,7 +489,7 @@ REffect::resume_t resume_context<Effect>::raise(REffect::raise_t in) {
     if (personality != nullptr) {
       _Unwind_Reason_Code personalityResult =
           personality(1, _UA_CLEANUP_PHASE, EXCEPTION_CLASS, ex.get(),
-                      reinterpret_cast<struct _Unwind_Context*>(&cur_cursor));
+              reinterpret_cast<struct _Unwind_Context*>(&cur_cursor));
 
       if (personalityResult == _URC_INSTALL_CONTEXT) {
         unw_resume(&cur_cursor);
@@ -508,13 +505,13 @@ REffect::resume_t resume_context<Effect>::raise(REffect::raise_t in) {
 static void __resume_nontail(uint64_t sp, handler_resumption_frame* frame) {
   assert(!frame->saved_stack.empty());
   std::copy(frame->saved_stack.begin(), frame->saved_stack.end(),
-            reinterpret_cast<char*>(sp));
+      reinterpret_cast<char*>(sp));
   frame->saved_stack.clear();
   auto saved_jmp = frame->saved_jmp;
   delete frame;
 #ifdef EFF_UNWIND_TRACE
-  fmt::println("restore stack = {:#x} - {:#x}", sp,
-               sp + frame->saved_stack.size());
+  fmt::println(
+      "restore stack = {:#x} - {:#x}", sp, sp + frame->saved_stack.size());
 #endif
   // trick the compiler it may not jump and thus could return
   static volatile bool always_jump = true;
@@ -523,8 +520,7 @@ static void __resume_nontail(uint64_t sp, handler_resumption_frame* frame) {
   }
 }
 
-__attribute__((always_inline)) inline void resume_nontail(
-    ptrdiff_t sp_delta,
+__attribute__((always_inline)) inline void resume_nontail(ptrdiff_t sp_delta,
     handler_resumption_frame* frame) {
   asm volatile("sub sp, sp, %0" : : "r"(sp_delta));
   uint64_t sp;
