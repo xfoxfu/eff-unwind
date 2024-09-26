@@ -10,19 +10,18 @@
 struct Get : public effect<uint64_t, uint64_t> {};
 struct Set : public effect<uint64_t, uint64_t> {};
 
-with_effect<int, Get, Set> countdown() {
-  effect_ctx<int, Get, Set> ctx;
-  auto i = ctx.raise<Get>(0);
+int countdown() {
+  auto i = raise<Get>(0);
   while (true) {
-    i = ctx.raise<Get>(0);
+    i = raise<Get>(0);
     if (i == 0) {
-      return ctx.ret(i);
+      return i;
     } else {
-      ctx.raise<Set>(i - 1);
+      raise<Set>(i - 1);
     }
   }
   assert(false);
-  return ctx.ret(0);
+  return 0;
 }
 
 int run(uint64_t n) {
@@ -30,13 +29,13 @@ int run(uint64_t n) {
 
   return do_handle<int, Get>(
       [&]() -> int {
-        return do_handle<int, Set>([]() -> int { return countdown().value; },
+        return do_handle<int, Set>([]() -> int { return countdown(); },
             [&](uint64_t in, auto ctx, auto b) -> uint64_t {
               s = in;
-              RESUME_THEN_BREAK(s);
+              return s;
             });
       },
-      [&](uint64_t in, auto ctx, auto b) -> uint64_t { RESUME_THEN_BREAK(s); });
+      [&](uint64_t in, auto ctx, auto b) -> uint64_t { return s; });
 }
 
 int main(int, char** argv) {

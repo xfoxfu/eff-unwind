@@ -1,18 +1,15 @@
-#include <_abort.h>
 #include <libunwind.h>
-#include <sys/cdefs.h>
 #include <unwind.h>
 #include <unwind_itanium.h>
 #include <cassert>
 #include <csetjmp>
 #include <cstddef>
-#include <functional>
+#include <cstdint>
 #include <type_traits>
 #include <typeindex>
 #include <vector>
 #include "fmt/base.h"
 #include "fmt/core.h"
-#include "scope_guard.hpp"
 
 #ifdef EFF_UNWIND_TRACE
 void print_frames(const char* prefix);
@@ -45,95 +42,61 @@ template <typename T>
 concept is_effect =
     std::is_base_of_v<effect<typename T::raise_t, typename T::resume_t>, T>;
 
-template <typename Effect, typename... Effects>
-concept is_one_of = (std::is_same_v<Effect, Effects> || ...);
-
-template <typename Return, typename... Effects>
-  requires(is_effect<Effects> && ...)
-class with_effect;
-
-template <typename Return, typename... Effects>
-  requires(is_effect<Effects> && ...)
-class effect_ctx {
-  bool has_resume = false;
-  char resume_value[std::max({sizeof(typename Effects::resume_t)...})];
-
- public:
-  typedef Return return_t;
-
-  template <typename E>
-#ifndef EFF_UNWIND_CONCEPT_CLANG_WORKAROUND
-    requires(std::is_same_v<E, Effects> || ...)
-#endif
-  E::resume_t raise(E::raise_t in);
-
-  with_effect<Return, Effects...> ret(Return val) {
-    return with_effect<Return, Effects...>(*this, std::move(val));
-  }
-};
-
-template <typename Return, typename... Effects>
-  requires(is_effect<Effects> && ...)
-class with_effect {
- public:
-  Return value;
-
-  with_effect(effect_ctx<Return, Effects...> ctx, Return&& value)
-      : value(value) {}
-};
-
+template <typename Effect>
+  requires(is_effect<Effect>)
+Effect::resume_t raise(typename Effect::raise_t value);
 struct handler_frame_base;
 
 struct handler_resumption_frame;
 
-template <typename Effect>
+template <typename resume_t>
+struct raise_context;
+
+template <typename Effect, typename yield_t>
   requires is_effect<Effect>
 class resume_context {
-  // TODO: try zero-copy
-  bool* ctx_has_resume;
-  char* ctx_resume_value;
   handler_frame_base& handler_frame;
+  raise_context<typename Effect::resume_t>& ctx;
 
  public:
-  resume_context(bool* ctx_has_resume,
-      char* ctx_resume_value,
-      handler_frame_base& handler_sp)
-      : ctx_has_resume(ctx_has_resume),
-        ctx_resume_value(ctx_resume_value),
-        handler_frame(handler_sp) {}
-
-  void break_resume(Effect::resume_t value);
-  bool resume(Effect::resume_t value);
-
-  template <typename REffect>
-    requires is_effect<REffect>
-  REffect::resume_t raise(REffect::raise_t in);
+  resume_context(handler_frame_base& handler_sp,
+      raise_context<typename Effect::resume_t>& ctx)
+      : handler_frame(handler_sp), ctx(ctx) {}
+  yield_t operator()(typename Effect::resume_t&& value);
 };
 
-template <typename Yield>
-class yield_context {};
+template <typename yield_t>
+class yield_context {
+  handler_frame_base& frame;
 
-template <typename Effect, typename F>
-concept is_handler_of = is_effect<Effect> &&
-    std::is_invocable<F, typename Effect::resume_t, resume_context<Effect>>::
-        value;
+ public:
+  yield_context(handler_frame_base& frame);
+  [[noreturn]] void operator()(yield_t value);
+};
 
-template <typename Effect, typename Yield, typename F>
+template <typename Effect, typename yield_t, typename F>
 concept is_handler_of_in_fn = is_effect<Effect> &&
-    std::is_invocable<F,
-        typename Effect::resume_t,
-        resume_context<Effect>,
-        Yield>::value;
+    std::is_invocable_v<F,
+        typename Effect::raise_t,
+        resume_context<Effect, yield_t>,
+        yield_context<yield_t>> &&
+    std::is_same_v<std::invoke_result_t<F,
+                       typename Effect::raise_t,
+                       resume_context<Effect, yield_t>,
+                       yield_context<yield_t>>,
+        typename Effect::resume_t>;
 
-template <typename Effect, typename F>
-  requires is_handler_of<Effect, F>
-auto __deprecated_handle(F handler);
-
-template <typename Return, typename F, typename Effect, typename H>
-  requires(is_effect<Effect> && is_handler_of_in_fn<Effect, Return, H>)
-Return do_handle(F doo, H handler);
+template <typename return_t, typename Effect, typename F, typename H>
+  requires(is_effect<Effect> && is_handler_of_in_fn<Effect, return_t, H>)
+return_t do_handle(F doo, H handler);
 
 // ===== implementation =====
+
+template <typename resume_t>
+struct raise_context {
+  jmp_buf jmp;
+  resume_t value;
+};
 
 struct handler_frame_found {
   const char* effect_typename;
@@ -170,7 +133,7 @@ struct handler_frame_invoke : public handler_frame_base {
       : handler_frame_base(effect, resume_fp, handler_sp) {}
 
   virtual Effect::resume_t invoke(Effect::raise_t in,
-      resume_context<Effect> ctx) = 0;
+      raise_context<typename Effect::resume_t>& ctx) = 0;
 };
 
 template <typename Effect>
@@ -180,8 +143,8 @@ struct can_handle {};
 extern uint64_t last_frame_id;
 extern std::vector<std::unique_ptr<handler_frame_base>> frames;
 
-template <typename Effect, typename Handler>
-  requires is_handler_of<Effect, Handler>
+template <typename Effect, typename Handler, typename yield_t>
+  requires is_handler_of_in_fn<Effect, yield_t, Handler>
 struct handler_frame : public can_handle<Effect>,
                        public handler_frame_invoke<Effect> {
   Handler handler;
@@ -194,23 +157,17 @@ struct handler_frame : public can_handle<Effect>,
         handler(handler) {}
 
   virtual Effect::resume_t invoke(Effect::raise_t in,
-      resume_context<Effect> ctx) {
-    return handler(in, ctx);
+      raise_context<typename Effect::resume_t>& ctx) override {
+    return handler(in, resume_context<Effect, yield_t>(*this, ctx),
+        yield_context<yield_t>(*this));
   }
 };
 
-template <typename Effect>
+template <typename Effect, typename yield_t>
   requires is_effect<Effect>
-void resume_context<Effect>::break_resume(typename Effect::resume_t value) {
-  *ctx_has_resume = true;
-  *reinterpret_cast<Effect::resume_t*>(ctx_resume_value) = value;
-}
 
-template <typename Effect>
-  requires is_effect<Effect>
-bool resume_context<Effect>::resume(typename Effect::resume_t value) {
-  *ctx_has_resume = true;
-  *reinterpret_cast<Effect::resume_t*>(ctx_resume_value) = value;
+yield_t resume_context<Effect, yield_t>::operator()(
+    typename Effect::resume_t&& value) {
   unw_word_t sp;
   unw_cursor_t cur_cursor;
   unw_context_t uc;
@@ -231,80 +188,41 @@ bool resume_context<Effect>::resume(typename Effect::resume_t value) {
 #endif
   std::copy(reinterpret_cast<char*>(sp), reinterpret_cast<char*>(sp2),
       resumption_frame.saved_stack.begin());
-  if (setjmp(resumption_frame.saved_jmp) != 0) {
-    // TODO: why remove this line does not break `test_main`?
-    // *ctx_has_resume = false;
-    return false;
+  ctx.value = value;
+#ifdef EFF_UNWIND_TRACE
+  fmt::println("set resume value = {}", value);
+#endif
+  if (setjmp(resumption_frame.saved_jmp) == 0) {
+    longjmp(ctx.jmp, 1);
+  } else {
+#ifdef EFF_UNWIND_TRACE
+    fmt::println("after resume");
+#endif
+    // TODO: give me yield value
+    return std::move(ctx.value);
   }
-  return true;
 }
 
 __attribute__((always_inline)) inline void resume_nontail(ptrdiff_t,
     handler_resumption_frame*);
 
-template <typename Effect, typename F>
-  requires is_handler_of<Effect, F>
-__attribute__((always_inline)) auto __deprecated_handle(F handler) {
+template <typename return_t, typename Effect, typename F, typename H>
+  requires(is_effect<Effect> && is_handler_of_in_fn<Effect, return_t, H>)
+return_t do_handle(F doo, H handler) {
   // The frame pointer (x29) is required for compatibility with fast stack
   // walking used by ETW and other services. It must point to the previous {x29,
   // x30} pair on the stack.
   uint64_t fp;
   asm volatile("mov %0, fp" : "=r"(fp));
-
   uint64_t sp;
   asm volatile("mov %0, sp" : "=r"(sp));
 
-  auto frame = std::make_unique<handler_frame<Effect, F>>(
+  auto frame = std::make_unique<handler_frame<Effect, H, return_t>>(
       typeid(Effect), handler, *reinterpret_cast<uint64_t*>(fp), sp);
   auto frame_id = frame->id;
   frames.push_back(std::move(frame));
-  return sg::make_scope_guard([frame_id, sp]() {
-#ifdef EFF_UNWIND_TRACE
-    print_frames("destructor");
-    fmt::println("frame_count = {}", frames.back()->resumption_frames.size());
-#endif
-    if (frames.back()->resumption_frames.size() > 0) {
-      handler_resumption_frame* frame;
-      frame = new handler_resumption_frame;
-      *frame = std::move(frames.back()->resumption_frames.back());
-      frames.back()->resumption_frames.pop_back();
 
-      uint64_t nsp;
-      asm volatile("mov %0, sp" : "=r"(nsp));
-      ptrdiff_t sp_delta = nsp - sp + frame->saved_stack.size();
-
-#ifdef EFF_UNWIND_TRACE
-      fmt::println("sp = {:#x}, nsp = {:#x}, sp_delta = {}", sp, nsp, sp_delta);
-      fmt::println("resumption frame size = {:#x}", frame->saved_stack.size());
-#endif
-
-      resume_nontail(sp_delta, frame);
-    }
-
-    auto pop_frame_id = frames.back()->id;
-
-    frames.pop_back();
-    assert(pop_frame_id == frame_id);
-  });
-}
-
-template <typename Return, typename Effect, typename F, typename H>
-  requires(is_effect<Effect> && is_handler_of_in_fn<Effect, Return, H>)
-Return do_handle(F doo, H handler) {
-  uint64_t fp;
-  asm volatile("mov %0, fp" : "=r"(fp));
-  uint64_t sp;
-  asm volatile("mov %0, sp" : "=r"(sp));
-
-  yield_context<Return> yctx;
-  auto handler_ =
-      std::bind(handler, std::placeholders::_1, std::placeholders::_2, yctx);
-  auto frame = std::make_unique<handler_frame<Effect, decltype(handler_)>>(
-      typeid(Effect), handler_, *reinterpret_cast<uint64_t*>(fp), sp);
-  auto frame_id = frame->id;
-  frames.push_back(std::move(frame));
-
-  Return value = doo();
+  return_t value = doo();
 
 #ifdef EFF_UNWIND_TRACE
   print_frames("destructor");
@@ -337,6 +255,33 @@ Return do_handle(F doo, H handler) {
   return value;
 }
 
+template <typename Effect>
+  requires(is_effect<Effect>)
+Effect::resume_t raise(typename Effect::raise_t value) {
+  // trick the compiler to generate exception tables
+  static volatile bool never_throw = false;
+  if (never_throw) {
+    throw 42;
+  }
+  auto frame = std::find_if(frames.rbegin(), frames.rend(),
+      [&](const auto& frame) { return frame->effect == typeid(Effect); });
+
+  if (frame == frames.rend()) {
+#ifdef EFF_UNWIND_TRACE
+    fmt::println("reached frame end, handler not found, aborting");
+#endif
+    std::abort();
+  }
+
+  raise_context<typename Effect::resume_t> ctx;
+  if (setjmp(ctx.jmp) == 0) {
+    return static_cast<handler_frame_invoke<Effect>&>(**frame).invoke(
+        value, ctx);
+  } else {
+    return std::move(ctx.value);
+  }
+}
+
 constexpr _Unwind_Exception_Class EXCEPTION_CLASS = 0x58464f5845480000;
 
 _Unwind_Reason_Code eff_stop_fn(int version,
@@ -346,42 +291,16 @@ _Unwind_Reason_Code eff_stop_fn(int version,
     struct _Unwind_Context* context,
     void* stop_parameter);
 
-template <typename Return, typename... Effects>
-  requires(is_effect<Effects> && ...)
-template <typename E>
-#ifndef EFF_UNWIND_CONCEPT_CLANG_WORKAROUND
-  requires(std::is_same_v<E, Effects> || ...)
-#endif
-E::resume_t effect_ctx<Return, Effects...>::raise(E::raise_t in) {
-  // trick the compiler to generate exception tables
-  static volatile bool never_throw = false;
-  if (never_throw) {
-    throw 42;
-  }
-  auto frame = std::find_if(frames.rbegin(), frames.rend(),
-      [&](const auto& frame) { return frame->effect == typeid(E); });
+template <typename yield_t>
+yield_context<yield_t>::yield_context(handler_frame_base& frame)
+    : frame(frame) {}
 
-  if (frame == frames.rend()) {
-#ifdef EFF_UNWIND_TRACE
-    fmt::println("reached frame end, handler not found, aborting");
-#endif
-    std::abort();
-  }
-
-  resume_context<E> rctx(
-      &has_resume, reinterpret_cast<char*>(&resume_value), **frame);
-  auto result = static_cast<handler_frame_invoke<E>&>(**frame).invoke(in, rctx);
-
-  // resume is called
-  if (has_resume) {
-    has_resume = false;
-    return *reinterpret_cast<E::resume_t*>(&resume_value);
-  }
-
+template <typename yield_t>
+void yield_context<yield_t>::operator()(yield_t value) {
   // resume is not called, meaning breaking
   // when break, need to do unwinding
   // step more to get to parent function to make caller returns
-  auto target_fp = (**frame).resume_fp;
+  auto target_fp = frame.resume_fp;
   unw_cursor_t cur_cursor;
   unw_context_t uc;
   unw_getcontext(&uc);
@@ -394,7 +313,7 @@ E::resume_t effect_ctx<Return, Effects...>::raise(E::raise_t in) {
   ex->private_2 = target_fp;
   ex->exception_cleanup =
       (decltype(ex->exception_cleanup))(new handler_frame_found(
-          (*frame)->effect.name(), static_cast<unw_word_t>(result)));
+          frame.effect.name(), static_cast<unw_word_t>(value)));
   int unw_error;
   while ((unw_error = unw_step(&cur_cursor)) > 0) {
     unw_proc_info_t pi;
@@ -425,95 +344,10 @@ E::resume_t effect_ctx<Return, Effects...>::raise(E::raise_t in) {
 #ifdef EFF_UNWIND_TRACE
   print_proc("unw_resume", cur_cursor);
 #endif
-  unw_set_reg(&cur_cursor, UNW_AARCH64_X0, static_cast<unw_word_t>(result));
+  unw_set_reg(&cur_cursor, UNW_AARCH64_X0, static_cast<unw_word_t>(value));
   unw_resume(&cur_cursor);
+
   abort();  // unreachable
-  return {};
-}
-
-// FIXME: DRY!!!
-template <typename Effect>
-  requires is_effect<Effect>
-template <typename REffect>
-  requires is_effect<REffect>
-REffect::resume_t resume_context<Effect>::raise(REffect::raise_t in) {
-  // trick the compiler to generate exception tables
-  static volatile bool never_throw = false;
-  if (never_throw) {
-    throw 42;
-  }
-  auto frame =
-      std::find_if(frames.rbegin(), frames.rend(), [&](const auto& frame) {
-        // TODO: mask a part of vector since handler could register new
-        // handlers.
-        return frame->effect == typeid(Effect) && frame->id < handler_frame.id;
-      });
-
-  if (frame == frames.rend()) {
-    std::abort();
-  }
-
-  bool has_resume = false;
-  char resume_value[sizeof(REffect)];
-
-  resume_context<Effect> rctx(
-      &has_resume, reinterpret_cast<char*>(&resume_value), **frame);
-  auto result =
-      static_cast<handler_frame_invoke<Effect>&>(**frame).invoke(in, rctx);
-
-  // resume is called
-  if (has_resume) {
-    has_resume = false;
-    return *reinterpret_cast<Effect::resume_t*>(&resume_value);
-  }
-
-  // resume is not called, meaning breaking
-  // when break, need to do unwinding
-  // step more to get to parent function to make caller returns
-  auto target_fp = (**frame).resume_fp;
-  unw_cursor_t cur_cursor;
-  unw_context_t uc;
-  unw_getcontext(&uc);
-  unw_init_local(&cur_cursor, &uc);
-  std::unique_ptr<_Unwind_Exception> ex = std::make_unique<_Unwind_Exception>();
-  ex->exception_class = EXCEPTION_CLASS;
-  ex->private_1 = reinterpret_cast<uintptr_t>(eff_stop_fn);
-  unw_word_t sp;
-  unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &sp);
-  ex->private_2 = target_fp;
-  ex->exception_cleanup =
-      (decltype(ex->exception_cleanup))(new handler_frame_found(
-          (*frame)->effect.name(), static_cast<unw_word_t>(result)));
-  int unw_error;
-  while ((unw_error = unw_step(&cur_cursor)) > 0) {
-    unw_proc_info_t pi;
-    unw_get_proc_info(&cur_cursor, &pi);
-
-    unw_word_t fp;
-    unw_get_reg(&cur_cursor, UNW_AARCH64_FP, &fp);
-
-    // cannot find frame by comparing cursor, so compare by sp
-    if (fp == target_fp) {
-      break;
-    }
-
-    // if not break, perform cleanup
-    _Unwind_Personality_Fn personality =
-        reinterpret_cast<_Unwind_Personality_Fn>(pi.handler);
-    if (personality != nullptr) {
-      _Unwind_Reason_Code personalityResult =
-          personality(1, _UA_CLEANUP_PHASE, EXCEPTION_CLASS, ex.get(),
-              reinterpret_cast<struct _Unwind_Context*>(&cur_cursor));
-
-      if (personalityResult == _URC_INSTALL_CONTEXT) {
-        unw_resume(&cur_cursor);
-      }
-    }
-  }
-
-  fmt::println("unreachable! = {}", unw_error);
-  assert(false);  // unreachable
-  return static_cast<typename Effect::resume_t>(NULL);
 }
 
 static void __resume_nontail(uint64_t sp, handler_resumption_frame* frame) {
@@ -526,7 +360,7 @@ static void __resume_nontail(uint64_t sp, handler_resumption_frame* frame) {
       reinterpret_cast<char*>(sp));
   frame->saved_stack.clear();
   jmp_buf saved_jmp;
-  std::copy(frame->saved_jmp, frame->saved_jmp + sizeof(jmp_buf), saved_jmp);
+  memcpy(saved_jmp, frame->saved_jmp, sizeof(jmp_buf));
   delete frame;
   // trick the compiler it may not jump and thus could return
   static volatile bool always_jump = true;

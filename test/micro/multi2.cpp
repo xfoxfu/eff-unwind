@@ -1,39 +1,40 @@
 #include "eff-unwind.hpp"
+#include "fmt/base.h"
 #include "fmt/core.h"
 
 struct RAII {
-  ~RAII() {}
+  ~RAII() { fmt::println("RAII"); }
 };
 
 struct Exception : public effect<uint64_t, uint64_t> {};
 
-with_effect<int, Exception> foobar() {
-  effect_ctx<int, Exception> ctx;
-  auto num = ctx.raise<Exception>(0);
-  return ctx.ret(56);
+int foobar() {
+  auto num = raise<Exception>(0);
+  fmt::println("Exception resume={}", num);
+  return 56;
 }
 
 uint64_t has_handler() {
   return do_handle<uint64_t, Exception>(
       []() {
         int num = 42;
-        // RAII raii;
-        int ret = foobar().value;
-        // resume_nontail();
+        int ret = foobar();
         return 0;
       },
-      [](uint64_t in, auto ctx, auto yield) -> uint64_t {
+      [](uint64_t in, auto resume, auto yield) -> uint64_t {
+  // RAII raii;
 #ifdef EFF_UNWIND_TRACE
         print_frames("handler pre");
 #endif
-        RESUME(42);
+        resume(42);
 #ifdef EFF_UNWIND_TRACE
+        fmt::println("handler post");
         print_frames("handler post");
 #endif
         fmt::println("non-tail resumption");
-        RESUME(42);
+        resume(43);
         fmt::println("non-tail resumption2");
-        BREAK(0);
+        yield(0);
       });
 }
 

@@ -18,29 +18,27 @@ struct RAII {
 
 struct Abort : public effect<int, unit_t> {};
 
-with_effect<unit_t, Abort> product(std::vector<int>::const_iterator xs_begin,
+int product(std::vector<int>::const_iterator xs_begin,
     std::vector<int>::const_iterator xs_end) {
 #ifdef TEST_RAII
   RAII raii;
 #endif
-  effect_ctx<unit_t, Abort> ctx;
   int product = 1;
   for (auto it = xs_begin; it != xs_end; it++) {
     if (*it == 0) {
-      ctx.raise<Abort>(0);
+      raise<Abort>(0);
       abort();  // unreachable
-      return ctx.ret(0);
+      return 0;
     } else {
       product *= *it;
     }
   }
-  return ctx.ret(product);
+  return product;
 }
 
 int run_product(std::vector<int>& xs) {
-  return do_handle<int, Abort>(
-      [&]() { return product(xs.begin(), xs.end()).value; },
-      [](auto r, auto ctx, auto yctx) -> unit_t { BREAK(r); });
+  return do_handle<int, Abort>([&]() { return product(xs.begin(), xs.end()); },
+      [](auto r, auto resume, auto yield) -> unit_t { yield(r); });
 }
 
 unit_t run(int n) {
