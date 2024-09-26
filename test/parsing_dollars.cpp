@@ -56,6 +56,7 @@ void feed(int n) {
       j -= 1;
       RESUME_THEN_BREAK(dollar());
     }
+    return {};
   });
   parse();
 }

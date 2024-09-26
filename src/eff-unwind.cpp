@@ -1,5 +1,6 @@
 #include "eff-unwind.hpp"
 #include <libunwind.h>
+#include <csetjmp>
 #include <typeindex>
 #include "fmt/core.h"
 
@@ -100,5 +101,15 @@ void print_memory(const char* start, const char* end) {
     }
   }
   fmt::print("\n");
+}
+
+void print_proc(const char* name, unw_cursor_t& cursor) {
+  unw_proc_info_t proc_info;
+  unw_word_t off;
+  unw_get_proc_info(&cursor, &proc_info);
+  char* proc_name = new char[1000];
+  unw_get_proc_name(&cursor, proc_name, 1000, &off);
+  fmt::println("{}: {} +{:#x}", name, proc_name, off);
+  delete[] proc_name;
 }
 #endif

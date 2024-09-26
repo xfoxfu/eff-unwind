@@ -1,3 +1,4 @@
+#include <_abort.h>
 #include <libunwind.h>
 #include <unwind.h>
 #include <unwind_itanium.h>
@@ -7,6 +8,7 @@
 #include <type_traits>
 #include <typeindex>
 #include <vector>
+#include "fmt/base.h"
 #include "fmt/core.h"
 #include "scope_guard.hpp"
 
@@ -14,17 +16,19 @@
 void print_frames(const char* prefix);
 
 void print_memory(const char* start, const char* end);
+
+void print_proc(const char* name, unw_cursor_t& proc_info);
 #endif
 
 #define RESUME(v)      \
   {                    \
     if (ctx.resume(v)) \
-      return 0;        \
+      return {};       \
   }
 #define RESUME_THEN_BREAK(v) \
   {                          \
     ctx.break_resume(v);     \
-    return 0;                \
+    return {};               \
   }
 #define BREAK(v) return (v);
 
@@ -115,8 +119,9 @@ template <typename Effect, typename F>
   requires is_handler_of<Effect, F>
 auto handle(F handler);
 
-// FIXME: support more data types
-void set_resumption_value(uint64_t value);
+template <typename Return, typename F, typename Effect, typename H>
+  requires(is_effect<Effect>)
+Return do_handle(F doo, H handler);
 
 // ===== implementation =====
 
@@ -274,6 +279,52 @@ __attribute__((always_inline)) auto handle(F handler) {
   });
 }
 
+template <typename Return, typename Effect, typename F, typename H>
+  requires(is_effect<Effect>)
+Return do_handle(F doo, H handler) {
+  uint64_t fp;
+  asm volatile("mov %0, fp" : "=r"(fp));
+  uint64_t sp;
+  asm volatile("mov %0, sp" : "=r"(sp));
+
+  auto frame = std::make_unique<handler_frame<Effect, H>>(
+      typeid(Effect), handler, *reinterpret_cast<uint64_t*>(fp), sp);
+  auto frame_id = frame->id;
+  frames.push_back(std::move(frame));
+
+  Return value = doo();
+
+#ifdef EFF_UNWIND_TRACE
+  print_frames("destructor");
+  fmt::println("frame_count = {}", frames.back()->resumption_frames.size());
+#endif
+  //   if (frames.back()->resumption_frames.size() > 0) {
+  //     handler_resumption_frame* frame;
+  //     frame = new handler_resumption_frame;
+  //     *frame = std::move(frames.back()->resumption_frames.back());
+  //     frames.back()->resumption_frames.pop_back();
+  //
+  //     uint64_t nsp;
+  //     asm volatile("mov %0, sp" : "=r"(nsp));
+  //     ptrdiff_t sp_delta = nsp - sp + frame->saved_stack.size();
+  //
+  // #ifdef EFF_UNWIND_TRACE
+  //     fmt::println("sp = {:#x}, nsp = {:#x}, sp_delta = {}", sp, nsp,
+  //     sp_delta); fmt::println("resumption frame size = {:#x}",
+  //     frame->saved_stack.size());
+  // #endif
+  //
+  //     resume_nontail(sp_delta, frame);
+  //   }
+
+  auto pop_frame_id = frames.back()->id;
+
+  frames.pop_back();
+  assert(pop_frame_id == frame_id);
+
+  return value;
+}
+
 constexpr _Unwind_Exception_Class EXCEPTION_CLASS = 0x58464f5845480000;
 
 _Unwind_Reason_Code eff_stop_fn(int version,
@@ -360,10 +411,13 @@ E::resume_t effect_ctx<Return, Effects...>::raise(E::raise_t in) {
     }
   }
 
-  // TODO: this should not panic. It means no cleanup is found. Just jump.
-  fmt::println("unreachable! = {}", unw_error);
-  assert(false);  // unreachable
-  return static_cast<typename E::resume_t>(NULL);
+#ifdef EFF_UNWIND_TRACE
+  print_proc("unw_resume", cur_cursor);
+#endif
+  unw_set_reg(&cur_cursor, UNW_AARCH64_X0, static_cast<unw_word_t>(result));
+  unw_resume(&cur_cursor);
+  abort();  // unreachable
+  return {};
 }
 
 // FIXME: DRY!!!
