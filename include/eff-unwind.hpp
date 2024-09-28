@@ -5,10 +5,10 @@
 #include <csetjmp>
 #include <cstddef>
 #include <cstdint>
+#include <scope_guard.hpp>
 #include <type_traits>
 #include <typeindex>
 #include <vector>
-#include "fmt/base.h"
 #include "fmt/core.h"
 
 #ifdef EFF_UNWIND_TRACE
@@ -19,17 +19,20 @@ void print_memory(const char* start, const char* end);
 void print_proc(const char* name, unw_cursor_t& proc_info);
 #endif
 
-#define RESUME(v)      \
-  {                    \
-    if (ctx.resume(v)) \
-      return {};       \
-  }
-#define RESUME_THEN_BREAK(v) \
-  {                          \
-    ctx.break_resume(v);     \
-    return {};               \
-  }
-#define BREAK(v) return (v);
+// FIXME: make the templates support `void`
+class unit_t {
+ public:
+  operator unw_word_t() { return 0; }
+  operator char() { return '-'; }
+};
+#ifdef EFF_UNWIND_TRACE
+template <>
+struct fmt::formatter<unit_t> : formatter<string_view> {
+  // parse is inherited from formatter<string_view>.
+
+  auto format(unit_t c, format_context& ctx) const -> format_context::iterator;
+};
+#endif
 
 template <typename Raise, typename Resume>
 class effect {
@@ -45,6 +48,7 @@ concept is_effect =
 template <typename Effect>
   requires(is_effect<Effect>)
 Effect::resume_t raise(typename Effect::raise_t value);
+
 struct handler_frame_base;
 
 struct handler_resumption_frame;
@@ -52,17 +56,15 @@ struct handler_resumption_frame;
 template <typename resume_t>
 struct raise_context;
 
-template <typename Effect, typename yield_t>
-  requires is_effect<Effect>
+template <typename resume_t, typename yield_t>
 class resume_context {
   handler_frame_base& handler_frame;
-  raise_context<typename Effect::resume_t>& ctx;
+  raise_context<resume_t>& ctx;
 
  public:
-  resume_context(handler_frame_base& handler_sp,
-      raise_context<typename Effect::resume_t>& ctx)
+  resume_context(handler_frame_base& handler_sp, raise_context<resume_t>& ctx)
       : handler_frame(handler_sp), ctx(ctx) {}
-  yield_t operator()(typename Effect::resume_t&& value);
+  yield_t operator()(resume_t value);
 };
 
 template <typename yield_t>
@@ -158,16 +160,14 @@ struct handler_frame : public can_handle<Effect>,
 
   virtual Effect::resume_t invoke(Effect::raise_t in,
       raise_context<typename Effect::resume_t>& ctx) override {
-    return handler(in, resume_context<Effect, yield_t>(*this, ctx),
+    return handler(in,
+        resume_context<typename Effect::resume_t, yield_t>(*this, ctx),
         yield_context<yield_t>(*this));
   }
 };
 
-template <typename Effect, typename yield_t>
-  requires is_effect<Effect>
-
-yield_t resume_context<Effect, yield_t>::operator()(
-    typename Effect::resume_t&& value) {
+template <typename resume_t, typename yield_t>
+yield_t resume_context<resume_t, yield_t>::operator()(resume_t value) {
   unw_word_t sp;
   unw_cursor_t cur_cursor;
   unw_context_t uc;
@@ -222,35 +222,37 @@ return_t do_handle(F doo, H handler) {
   auto frame_id = frame->id;
   frames.push_back(std::move(frame));
 
+  auto guard = sg::make_scope_guard([&] {
+#ifdef EFF_UNWIND_TRACE
+    print_frames("destructor");
+    fmt::println("frame_count = {}", frames.back()->resumption_frames.size());
+#endif
+    if (frames.back()->resumption_frames.size() > 0) {
+      handler_resumption_frame* frame;
+      frame = new handler_resumption_frame;
+      *frame = std::move(frames.back()->resumption_frames.back());
+      frames.back()->resumption_frames.pop_back();
+
+      uint64_t nsp;
+      asm volatile("mov %0, sp" : "=r"(nsp));
+      ptrdiff_t sp_delta = nsp - sp + frame->saved_stack.size();
+
+#ifdef EFF_UNWIND_TRACE
+      fmt::println(
+          "sp = {:#x}, nsp = {:#x}, sp_delta = {:#x}", sp, nsp, sp_delta);
+      fmt::println("resumption frame size = {:#x}", frame->saved_stack.size());
+#endif
+
+      resume_nontail(sp_delta, frame);
+    }
+
+    auto pop_frame_id = frames.back()->id;
+
+    frames.pop_back();
+    assert(pop_frame_id == frame_id);
+  });
+
   return_t value = doo();
-
-#ifdef EFF_UNWIND_TRACE
-  print_frames("destructor");
-  fmt::println("frame_count = {}", frames.back()->resumption_frames.size());
-#endif
-  if (frames.back()->resumption_frames.size() > 0) {
-    handler_resumption_frame* frame;
-    frame = new handler_resumption_frame;
-    *frame = std::move(frames.back()->resumption_frames.back());
-    frames.back()->resumption_frames.pop_back();
-
-    uint64_t nsp;
-    asm volatile("mov %0, sp" : "=r"(nsp));
-    ptrdiff_t sp_delta = nsp - sp + frame->saved_stack.size();
-
-#ifdef EFF_UNWIND_TRACE
-    fmt::println(
-        "sp = {:#x}, nsp = {:#x}, sp_delta = {:#x}", sp, nsp, sp_delta);
-    fmt::println("resumption frame size = {:#x}", frame->saved_stack.size());
-#endif
-
-    resume_nontail(sp_delta, frame);
-  }
-
-  auto pop_frame_id = frames.back()->id;
-
-  frames.pop_back();
-  assert(pop_frame_id == frame_id);
 
   return value;
 }
@@ -270,7 +272,7 @@ Effect::resume_t raise(typename Effect::raise_t value) {
 #ifdef EFF_UNWIND_TRACE
     fmt::println("reached frame end, handler not found, aborting");
 #endif
-    std::abort();
+    abort();
   }
 
   raise_context<typename Effect::resume_t> ctx;

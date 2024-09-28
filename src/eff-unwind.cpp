@@ -4,6 +4,14 @@
 #include <typeindex>
 #include "fmt/core.h"
 
+#ifdef EFF_UNWIND_TRACE
+auto fmt::formatter<unit_t>::format(unit_t c, format_context& ctx) const
+    -> format_context::iterator {
+  string_view name = "unknown";
+  return formatter<string_view>::format(name, ctx);
+}
+#endif
+
 uint64_t last_frame_id = 0;
 
 // TODO: add mutex guard for frame
