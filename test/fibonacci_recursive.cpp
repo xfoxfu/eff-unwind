@@ -4,8 +4,10 @@
  * This test case computes fibonacci fib(n=40) for 1_0000 times.
  */
 
-#include <cstdint>
 #include <iostream>
+#ifndef NDEBUG
+#include <cassert>
+#endif
 
 int fib(int n) {
   if (n == 0) {
@@ -18,6 +20,13 @@ int fib(int n) {
 }
 
 int main(int, char** argv) {
-  std::cout << fib(std::stoi(argv[1])) << std::endl;
+  auto size = std::stoi(argv[1]);
+  auto value = fib(size);
+  std::cout << value << std::endl;
+#ifndef NDEBUG
+  if (size == 42) {
+    assert(value == 267914296);
+  }
+#endif
   return 0;
 }

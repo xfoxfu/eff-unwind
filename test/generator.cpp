@@ -7,6 +7,7 @@
 
 // FIXME: support store resumption and call later
 
+#include <iostream>
 #include <memory>
 #include <variant>
 #include "eff-unwind.hpp"
@@ -22,11 +23,18 @@ struct Tree_Node {
   std::unique_ptr<Tree> right;
 };
 
-void run(uint64_t n) {}
+int run(uint64_t n) {
+  return 0;
+}
 
-int main() {
-  for (int i = 0; i < 1'000'0; i++) {
-    run(1000);
+int main(int, char** argv) {
+  auto size = std::stoi(argv[1]);
+  auto value = run(size);
+  std::cout << value << std::endl;
+#ifndef NDEBUG
+  if (size == 40000000) {
+    assert(value == 67108837);
   }
+#endif
   return 0;
 }

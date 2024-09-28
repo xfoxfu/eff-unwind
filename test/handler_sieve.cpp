@@ -7,38 +7,39 @@
 
 struct Prime : public effect<uint64_t, bool> {};
 
-with_effect<int, Prime> primes(int i, int n, int a) {
-  effect_ctx<int, Prime> ctx;
+int primes(int i, int n, int a) {
+  int ctx;
   if (i >= n) {
-    return ctx.ret(a);
+    return a;
   }
-  if (ctx.raise<Prime>(i)) {
-    // fmt::println("register handler for {}", i);
-    auto h = handle<Prime>([i](int e, auto ctx) -> bool {
-      // fmt::println("test {} / {} = {}", e, i, e % i);
-      if (e % i == 0) {
-        // fmt::println("break false");
-        RESUME_THEN_BREAK(false);
-      } else {
-        // fmt::println("raise {}", e);
-        auto val = ctx.template raise<Prime>(e);
-        // fmt::println("get {}", val);
-        RESUME_THEN_BREAK(ctx.template raise<Prime>(e));
-      }
-    });
-    return primes(i + 1, n, a + i);
+  if (raise<Prime>(i)) {
+    return do_handle<int, Prime>([&]() { return primes(i + 1, n, a + i); },
+        [i](int e, auto resume, auto yield) -> bool {
+          if (e % i == 0) {
+            return false;
+          } else {
+            auto val = raise<Prime>(e);
+            return raise<Prime>(e);
+          }
+        });
   } else {
     return primes(i + 1, n, a);
   }
 }
 
 int run(int n) {
-  auto h =
-      handle<Prime>([](int e, auto ctx) -> bool { RESUME_THEN_BREAK(true); });
-  return primes(2, n, 0).value;
+  return do_handle<int, Prime>([&]() { return primes(2, n, 0); },
+      [](int e, auto resume, auto yield) -> bool { return true; });
 }
 
 int main(int, char** argv) {
-  std::cout << run(std::stoi(argv[1])) << std::endl;
+  auto size = std::stoi(argv[1]);
+  auto value = run(size);
+  std::cout << value << std::endl;
+#ifndef NDEBUG
+  if (size == 100) {
+    assert(value == 1060);
+  }
+#endif
   return 0;
 }

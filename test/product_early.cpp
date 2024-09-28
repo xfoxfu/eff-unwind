@@ -6,7 +6,6 @@
 #include "eff-unwind.hpp"
 #include "fmt/core.h"
 
-typedef int unit_t;
 typedef int char_t;
 
 #ifdef TEST_RAII
@@ -18,31 +17,30 @@ struct RAII {
 
 struct Abort : public effect<int, unit_t> {};
 
-with_effect<unit_t, Abort> product(std::vector<int>::const_iterator xs_begin,
+int product(std::vector<int>::const_iterator xs_begin,
     std::vector<int>::const_iterator xs_end) {
 #ifdef TEST_RAII
   RAII raii;
 #endif
-  effect_ctx<unit_t, Abort> ctx;
   int product = 1;
   for (auto it = xs_begin; it != xs_end; it++) {
     if (*it == 0) {
-      ctx.raise<Abort>(0);
+      raise<Abort>(0);
       abort();  // unreachable
-      return ctx.ret(0);
+      return 0;
     } else {
       product *= *it;
     }
   }
-  return ctx.ret(product);
+  return product;
 }
 
 int run_product(std::vector<int>& xs) {
-  auto g = handle<Abort>([](auto r, auto ctx) -> unit_t { BREAK(r); });
-  return product(xs.begin(), xs.end()).value;
+  return do_handle<int, Abort>([&]() { return product(xs.begin(), xs.end()); },
+      [](auto r, auto resume, auto yield) -> unit_t { yield(r); });
 }
 
-unit_t run(int n) {
+int run(int n) {
   std::vector<int> xs(1001);
   xs.reserve(1001);
   for (int i = 0; i <= 1000; i++) {
@@ -57,6 +55,13 @@ unit_t run(int n) {
 }
 
 int main(int, char** argv) {
-  std::cout << run(std::stoi(argv[1])) << std::endl;
+  auto size = std::stoi(argv[1]);
+  auto value = run(size);
+  std::cout << value << std::endl;
+#ifndef NDEBUG
+  if (size == 100000) {
+    assert(value == 0);
+  }
+#endif
   return 0;
 }

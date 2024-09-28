@@ -10,33 +10,42 @@
 struct Get : public effect<uint64_t, uint64_t> {};
 struct Set : public effect<uint64_t, uint64_t> {};
 
-with_effect<int, Get, Set> countdown() {
-  effect_ctx<int, Get, Set> ctx;
-  auto i = ctx.raise<Get>(0);
+int countdown() {
+  auto i = raise<Get>(0);
   while (true) {
-    i = ctx.raise<Get>(0);
+    i = raise<Get>(0);
     if (i == 0) {
-      return ctx.ret(i);
+      return i;
     } else {
-      ctx.raise<Set>(i - 1);
+      raise<Set>(i - 1);
     }
   }
   assert(false);
-  return ctx.ret(0);
+  return 0;
 }
 
 int run(uint64_t n) {
   auto s = n;
-  auto handle_get = handle<Get>(
-      [&](uint64_t in, auto ctx) -> uint64_t { RESUME_THEN_BREAK(s); });
-  auto handle_set = handle<Set>([&](uint64_t in, auto ctx) -> uint64_t {
-    s = in;
-    RESUME_THEN_BREAK(s);
-  });
-  return countdown().value;
+
+  return do_handle<int, Get>(
+      [&]() -> int {
+        return do_handle<int, Set>([]() -> int { return countdown(); },
+            [&](uint64_t in, auto ctx, auto b) -> uint64_t {
+              s = in;
+              return s;
+            });
+      },
+      [&](uint64_t in, auto ctx, auto b) -> uint64_t { return s; });
 }
 
 int main(int, char** argv) {
-  std::cout << run(std::stoi(argv[1])) << std::endl;
+  auto size = std::stoi(argv[1]);
+  auto value = run(size);
+  std::cout << value << std::endl;
+#ifndef NDEBUG
+  if (size == 200000000) {
+    assert(value == 0);
+  }
+#endif
   return 0;
 }

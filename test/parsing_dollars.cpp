@@ -5,7 +5,6 @@
 #include "eff-unwind.hpp"
 #include "fmt/core.h"
 
-typedef int unit_t;
 typedef int char_t;
 
 struct Read : public effect<unit_t, char_t> {};
@@ -26,58 +25,74 @@ bool is_dollar(char_t c) {
   return c == 36;
 }
 
-with_effect<unit_t, Read, Emit, Stop> parse() {
-  effect_ctx<unit_t, Read, Emit, Stop> ctx;
+void parse() {
   int a = 0;
   char_t c;
-  while ((c = ctx.raise<Read>(0))) {
+  while ((c = raise<Read>({}))) {
     if (is_dollar(c)) {
       a += 1;
     } else if (is_newline(c)) {
-      ctx.raise<Emit>(a);
+      raise<Emit>(a);
       a = 0;
     } else {
-      ctx.raise<Stop>(0);
+      raise<Stop>({});
     }
   }
-  return ctx.ret(0);  // unreachable
+  abort();  // unreachable
 }
 
 void feed(int n) {
   int i = 0, j = 0;
-  auto g = handle<Read>([&i, &j, &n](auto _, auto ctx) -> unit_t {
-    if (i > n) {
-      effect_ctx<unit_t, Stop>().raise<Stop>(0);
-    } else if (j == 0) {
-      i += 1;
-      j = i;
-      RESUME_THEN_BREAK(newline());
-    } else {
-      j -= 1;
-      RESUME_THEN_BREAK(dollar());
-    }
-    return {};
-  });
-  parse();
+  do_handle<unit_t, Read>(
+      []() {
+        parse();
+        return unit_t();
+      },
+      [&i, &j, &n](auto _, auto resume, auto yield) -> char_t {
+        if (i > n) {
+          raise<Stop>({});
+        } else if (j == 0) {
+          i += 1;
+          j = i;
+          return newline();
+        } else {
+          j -= 1;
+          return dollar();
+        }
+        return {};
+      });
 }
 
 void catchh(int n) {
-  auto g = handle<Stop>([](auto _, auto ctx) -> unit_t { BREAK(0); });
-  feed(n);
+  do_handle<unit_t, Stop>(
+      [n]() -> unit_t {
+        feed(n);
+        return {};
+      },
+      [](auto _, auto resume, auto yield) -> unit_t { yield({}); });
 }
 
 uint32_t sum(int n) {
   int s = 0;
-  auto g = handle<Emit>([&s](int e, auto ctx) -> unit_t {
-    s += e;
-    RESUME_THEN_BREAK(0);
-  });
-  catchh(n);
-  fmt::println("after catchh");
-  return s;
+  return do_handle<uint32_t, Emit>(
+      [&]() {
+        catchh(n);
+        return s;
+      },
+      [&s](int e, auto resume, auto yield) -> unit_t {
+        s += e;
+        return {};
+      });
 }
 
 int main(int, char** argv) {
-  std::cout << sum(std::stoi(argv[1])) << std::endl;
+  auto size = std::stoi(argv[1]);
+  auto value = sum(size);
+  std::cout << value << std::endl;
+#ifndef NDEBUG
+  if (size == 20000) {
+    assert(value == 200010000);
+  }
+#endif
   return 0;
 }
