@@ -8,15 +8,16 @@
 #include <scope_guard.hpp>
 #include <type_traits>
 #include <typeindex>
+#include <unordered_map>
 #include <vector>
+#include "fmt/base.h"
 #include "fmt/core.h"
 
 #ifdef EFF_UNWIND_TRACE
 void print_frames(const char* prefix);
-
 void print_memory(const char* start, const char* end);
-
 void print_proc(const char* name, unw_cursor_t& proc_info);
+std::string demangle(const char* name);
 #endif
 
 // FIXME: make the templates support `void`
@@ -88,9 +89,10 @@ concept is_handler_of_in_fn = is_effect<Effect> &&
                        yield_context<yield_t>>,
         typename Effect::resume_t>;
 
+// FIXME: remove noinline to improve performance
 template <typename return_t, typename Effect, typename F, typename H>
   requires(is_effect<Effect> && is_handler_of_in_fn<Effect, return_t, H>)
-return_t do_handle(F doo, H handler);
+__attribute__((noinline)) return_t do_handle(F doo, H handler);
 
 // ===== implementation =====
 
@@ -142,8 +144,8 @@ template <typename Effect>
   requires is_effect<Effect>
 struct can_handle {};
 
-extern uint64_t last_frame_id;
-extern std::vector<std::unique_ptr<handler_frame_base>> frames;
+extern std::unordered_map<uintptr_t, std::unique_ptr<handler_frame_base>>
+    frames;
 
 template <typename Effect, typename Handler, typename yield_t>
   requires is_handler_of_in_fn<Effect, yield_t, Handler>
@@ -206,50 +208,65 @@ yield_t resume_context<resume_t, yield_t>::operator()(resume_t value) {
 __attribute__((always_inline)) inline void resume_nontail(ptrdiff_t,
     handler_resumption_frame*);
 
+inline uintptr_t get_fp() {
+  uint64_t fp;
+  asm volatile("mov %0, fp" : "=r"(fp));
+  return fp;
+}
+
+inline uintptr_t get_sp() {
+  uint64_t sp;
+  asm volatile("mov %0, sp" : "=r"(sp));
+  return sp;
+}
+
 template <typename return_t, typename Effect, typename F, typename H>
   requires(is_effect<Effect> && is_handler_of_in_fn<Effect, return_t, H>)
-return_t do_handle(F doo, H handler) {
+__attribute__((noinline)) return_t do_handle(F doo, H handler) {
   // The frame pointer (x29) is required for compatibility with fast stack
   // walking used by ETW and other services. It must point to the previous {x29,
   // x30} pair on the stack.
-  uint64_t fp;
-  asm volatile("mov %0, fp" : "=r"(fp));
-  uint64_t sp;
-  asm volatile("mov %0, sp" : "=r"(sp));
+  auto fp = get_fp();
+  auto sp = get_sp();
 
   auto frame = std::make_unique<handler_frame<Effect, H, return_t>>(
       typeid(Effect), handler, *reinterpret_cast<uint64_t*>(fp), sp);
-  auto frame_id = frame->id;
-  frames.push_back(std::move(frame));
-
-  auto guard = sg::make_scope_guard([&] {
+  frames.insert(std::make_pair(fp, std::move(frame)));
 #ifdef EFF_UNWIND_TRACE
-    print_frames("destructor");
-    fmt::println("frame_count = {}", frames.back()->resumption_frames.size());
+  fmt::println("register handler for {} at fp={:#x}",
+      demangle(typeid(Effect).name()), fp);
 #endif
-    if (frames.back()->resumption_frames.size() > 0) {
-      handler_resumption_frame* frame;
-      frame = new handler_resumption_frame;
-      *frame = std::move(frames.back()->resumption_frames.back());
-      frames.back()->resumption_frames.pop_back();
+
+  auto guard = sg::make_scope_guard([fp, sp] {
+    auto& frame = frames.at(fp);
+#ifdef EFF_UNWIND_TRACE
+    fmt::println("destructor for handler of {} [{}]",
+        demangle(frame->effect.name()), fp);
+    print_frames("destructor");
+    fmt::println(
+        "resumption frame_count = {}", frame->resumption_frames.size());
+#endif
+    if (frame->resumption_frames.size() > 0) {
+      handler_resumption_frame* rframe;
+      rframe = new handler_resumption_frame;
+      *rframe = std::move(frame->resumption_frames.back());
+      frame->resumption_frames.pop_back();
 
       uint64_t nsp;
       asm volatile("mov %0, sp" : "=r"(nsp));
-      ptrdiff_t sp_delta = nsp - sp + frame->saved_stack.size();
+      ptrdiff_t sp_delta = nsp - sp + rframe->saved_stack.size();
 
 #ifdef EFF_UNWIND_TRACE
       fmt::println(
           "sp = {:#x}, nsp = {:#x}, sp_delta = {:#x}", sp, nsp, sp_delta);
-      fmt::println("resumption frame size = {:#x}", frame->saved_stack.size());
+      fmt::println("resumption frame size = {:#x}", rframe->saved_stack.size());
 #endif
 
-      resume_nontail(sp_delta, frame);
+      resume_nontail(sp_delta, rframe);
     }
 
-    auto pop_frame_id = frames.back()->id;
-
-    frames.pop_back();
-    assert(pop_frame_id == frame_id);
+    // FIXME: do cleanup
+    // frames.erase(fp);
   });
 
   return_t value = doo();
@@ -265,23 +282,44 @@ Effect::resume_t raise(typename Effect::raise_t value) {
   if (never_throw) {
     throw 42;
   }
-  auto frame = std::find_if(frames.rbegin(), frames.rend(),
-      [&](const auto& frame) { return frame->effect == typeid(Effect); });
 
-  if (frame == frames.rend()) {
+  auto fp = get_fp();
+
 #ifdef EFF_UNWIND_TRACE
-    fmt::println("reached frame end, handler not found, aborting");
+  print_frames("raise");
 #endif
-    abort();
+  while (fp != reinterpret_cast<uintptr_t>(nullptr)) {
+#ifdef EFF_UNWIND_TRACE
+    fmt::println("searching frame at fp={:#x} for {}", fp,
+        demangle(typeid(Effect).name()));
+#endif
+    auto frame_it = frames.find(fp);
+#ifdef EFF_UNWIND_TRACE
+    if (frame_it == frames.end()) {
+      fmt::println("no frame associated with fp={:#x}", fp);
+    } else if (frame_it->second->effect != typeid(Effect)) {
+      fmt::println("frame on fp={:#x} is for {}", fp,
+          demangle(frame_it->second->effect.name()));
+    }
+#endif
+    if (frame_it != frames.end() &&
+        frame_it->second->effect == typeid(Effect)) {
+      auto& frame = frame_it->second;
+      raise_context<typename Effect::resume_t> ctx;
+      if (setjmp(ctx.jmp) == 0) {
+        return static_cast<handler_frame_invoke<Effect>&>(*frame).invoke(
+            value, ctx);
+      } else {
+        return std::move(ctx.value);
+      }
+    }
+    fp = *reinterpret_cast<uintptr_t*>(fp);
   }
 
-  raise_context<typename Effect::resume_t> ctx;
-  if (setjmp(ctx.jmp) == 0) {
-    return static_cast<handler_frame_invoke<Effect>&>(**frame).invoke(
-        value, ctx);
-  } else {
-    return std::move(ctx.value);
-  }
+  // #ifdef EFF_UNWIND_TRACE
+  fmt::println("reached frame end, handler not found, aborting");
+  // #endif
+  abort();
 }
 
 constexpr _Unwind_Exception_Class EXCEPTION_CLASS = 0x58464f5845480000;
@@ -299,6 +337,10 @@ yield_context<yield_t>::yield_context(handler_frame_base& frame)
 
 template <typename yield_t>
 void yield_context<yield_t>::operator()(yield_t value) {
+#ifdef EFF_UNWIND_TRACE
+  fmt::println(
+      "yielding value = {} [{}]", value, demangle(frame.effect.name()));
+#endif
   // resume is not called, meaning breaking
   // when break, need to do unwinding
   // step more to get to parent function to make caller returns

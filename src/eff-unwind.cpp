@@ -1,10 +1,25 @@
 #include "eff-unwind.hpp"
 #include <libunwind.h>
-#include <csetjmp>
 #include <typeindex>
 #include "fmt/core.h"
 
 #ifdef EFF_UNWIND_TRACE
+#include <cxxabi.h>
+#endif
+
+#ifdef EFF_UNWIND_TRACE
+std::string demangle(const char* name) {
+  int status;
+  char* demangled = abi::__cxa_demangle(name, nullptr, nullptr, &status);
+  if (status == 0) {
+    std::string result(demangled);
+    free(demangled);
+    return result;
+  } else {
+    return name;
+  }
+}
+
 auto fmt::formatter<unit_t>::format(unit_t c, format_context& ctx) const
     -> format_context::iterator {
   string_view name = "unknown";
@@ -12,17 +27,12 @@ auto fmt::formatter<unit_t>::format(unit_t c, format_context& ctx) const
 }
 #endif
 
-uint64_t last_frame_id = 0;
-
-// TODO: add mutex guard for frame
-std::vector<std::unique_ptr<handler_frame_base>> frames;
+std::unordered_map<uintptr_t, std::unique_ptr<handler_frame_base>> frames;
 
 handler_frame_base::handler_frame_base(std::type_index effect,
     uintptr_t resume_fp,
     uintptr_t handler_sp)
-    : effect(effect), resume_fp(resume_fp), handler_sp(handler_sp) {
-  id = last_frame_id++;
-}
+    : effect(effect), resume_fp(resume_fp), handler_sp(handler_sp) {}
 
 _Unwind_Reason_Code eff_stop_fn(int version,
     _Unwind_Action actions,
@@ -40,7 +50,7 @@ _Unwind_Reason_Code eff_stop_fn(int version,
   char* proc_name = new char[1000];
   unw_get_proc_name(cursor, proc_name, 1000, &off);
   fmt::println("unwind at fp={:#x}<>{:#x} {} +{:#x}", cur_fp,
-      exceptionObject->private_2, proc_name, off);
+      exceptionObject->private_2, demangle(proc_name), off);
   delete[] proc_name;
 #endif
 
@@ -64,8 +74,8 @@ _Unwind_Reason_Code eff_stop_fn(int version,
     unw_get_proc_info(cursor, &proc_info);
     char* proc_name = new char[1000];
     unw_get_proc_name(cursor, proc_name, 1000, &off);
-    fmt::println("target function: {} +{:#x}", cur_fp,
-        exceptionObject->private_2, proc_name, off);
+    fmt::println("target function: [fp={:#x}] {} +{:#x} [sp={:#x}]", cur_fp,
+        demangle(proc_name), off, exceptionObject->private_2);
     delete[] proc_name;
 #endif
     unw_resume(cursor);
@@ -91,7 +101,7 @@ void print_frames(const char* prefix) {
     char* proc_name = new char[1000];
     unw_get_proc_name(&cursor, proc_name, 1000, &off);
     fmt::println("{:16} [{}] sp={:#x} ip={:#x} fp={:#x} {} +{:#x}", prefix, i++,
-        sp, ip, fp, proc_name, off);
+        sp, ip, fp, demangle(proc_name), off);
     delete[] proc_name;
   }
 }
