@@ -1,10 +1,10 @@
 #include "eff-unwind.hpp"
 #include <libunwind.h>
 #include <typeindex>
-#include "fmt/core.h"
 
 #ifdef EFF_UNWIND_TRACE
 #include <cxxabi.h>
+#include "fmt/core.h"
 #endif
 
 #ifdef EFF_UNWIND_TRACE
@@ -27,12 +27,17 @@ auto fmt::formatter<unit_t>::format(unit_t c, format_context& ctx) const
 }
 #endif
 
-std::unordered_map<uintptr_t, std::unique_ptr<handler_frame_base>> frames;
+uint64_t last_frame_id = 0;
+
+// TODO: add mutex guard for frame
+std::vector<std::unique_ptr<handler_frame_base>> frames;
 
 handler_frame_base::handler_frame_base(std::type_index effect,
     uintptr_t resume_fp,
     uintptr_t handler_sp)
-    : effect(effect), resume_fp(resume_fp), handler_sp(handler_sp) {}
+    : effect(effect), resume_fp(resume_fp), handler_sp(handler_sp) {
+  id = last_frame_id++;
+}
 
 _Unwind_Reason_Code eff_stop_fn(int version,
     _Unwind_Action actions,

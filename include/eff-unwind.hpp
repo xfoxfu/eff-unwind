@@ -1,17 +1,18 @@
 #include <libunwind.h>
+#include <setjmp.h>
 #include <unwind.h>
 #include <unwind_itanium.h>
 #include <cassert>
-#include <csetjmp>
 #include <cstddef>
 #include <cstdint>
 #include <scope_guard.hpp>
 #include <type_traits>
 #include <typeindex>
-#include <unordered_map>
 #include <vector>
-#include "fmt/base.h"
+
+#ifdef EFF_UNWIND_TRACE
 #include "fmt/core.h"
+#endif
 
 #ifdef EFF_UNWIND_TRACE
 void print_frames(const char* prefix);
@@ -98,7 +99,7 @@ __attribute__((noinline)) return_t do_handle(F doo, H handler);
 
 template <typename resume_t>
 struct raise_context {
-  jmp_buf jmp;
+  sigjmp_buf jmp;
   resume_t value;
 };
 
@@ -111,7 +112,7 @@ struct handler_frame_found {
 };
 
 struct handler_resumption_frame {
-  jmp_buf saved_jmp;
+  sigjmp_buf saved_jmp;
   std::vector<char> saved_stack;
 };
 
@@ -144,8 +145,8 @@ template <typename Effect>
   requires is_effect<Effect>
 struct can_handle {};
 
-extern std::unordered_map<uintptr_t, std::unique_ptr<handler_frame_base>>
-    frames;
+extern uint64_t last_frame_id;
+extern std::vector<std::unique_ptr<handler_frame_base>> frames;
 
 template <typename Effect, typename Handler, typename yield_t>
   requires is_handler_of_in_fn<Effect, yield_t, Handler>
@@ -194,8 +195,8 @@ yield_t resume_context<resume_t, yield_t>::operator()(resume_t value) {
 #ifdef EFF_UNWIND_TRACE
   fmt::println("set resume value = {}", value);
 #endif
-  if (setjmp(resumption_frame.saved_jmp) == 0) {
-    longjmp(ctx.jmp, 1);
+  if (sigsetjmp(resumption_frame.saved_jmp, 0) == 0) {
+    siglongjmp(ctx.jmp, 1);
   } else {
 #ifdef EFF_UNWIND_TRACE
     fmt::println("after resume");
@@ -222,7 +223,7 @@ inline uintptr_t get_sp() {
 
 template <typename return_t, typename Effect, typename F, typename H>
   requires(is_effect<Effect> && is_handler_of_in_fn<Effect, return_t, H>)
-__attribute__((noinline)) return_t do_handle(F doo, H handler) {
+return_t do_handle(F doo, H handler) {
   // The frame pointer (x29) is required for compatibility with fast stack
   // walking used by ETW and other services. It must point to the previous {x29,
   // x30} pair on the stack.
@@ -231,26 +232,23 @@ __attribute__((noinline)) return_t do_handle(F doo, H handler) {
 
   auto frame = std::make_unique<handler_frame<Effect, H, return_t>>(
       typeid(Effect), handler, *reinterpret_cast<uint64_t*>(fp), sp);
-  frames.insert(std::make_pair(fp, std::move(frame)));
-#ifdef EFF_UNWIND_TRACE
-  fmt::println("register handler for {} at fp={:#x}",
-      demangle(typeid(Effect).name()), fp);
-#endif
+  auto frame_id = frame->id;
+  frames.push_back(std::move(frame));
 
-  auto guard = sg::make_scope_guard([fp, sp] {
-    auto& frame = frames.at(fp);
+  auto guard = sg::make_scope_guard([fp, sp, frame_id] {
+    auto& frame = frames.back();
 #ifdef EFF_UNWIND_TRACE
-    fmt::println("destructor for handler of {} [{}]",
+    fmt::println("destructor for handler of {} [{:#x}]",
         demangle(frame->effect.name()), fp);
     print_frames("destructor");
     fmt::println(
         "resumption frame_count = {}", frame->resumption_frames.size());
 #endif
-    if (frame->resumption_frames.size() > 0) {
+    if (frames.back()->resumption_frames.size() > 0) {
       handler_resumption_frame* rframe;
       rframe = new handler_resumption_frame;
-      *rframe = std::move(frame->resumption_frames.back());
-      frame->resumption_frames.pop_back();
+      *rframe = std::move(frames.back()->resumption_frames.back());
+      frames.back()->resumption_frames.pop_back();
 
       uint64_t nsp;
       asm volatile("mov %0, sp" : "=r"(nsp));
@@ -265,8 +263,14 @@ __attribute__((noinline)) return_t do_handle(F doo, H handler) {
       resume_nontail(sp_delta, rframe);
     }
 
-    // FIXME: do cleanup
-    // frames.erase(fp);
+    auto pop_frame_id = frames.back()->id;
+
+#ifdef EFF_UNWIND_TRACE
+    fmt::println(
+        "remove handler for {}", demangle(frames.back()->effect.name()));
+#endif
+    frames.pop_back();
+    assert(pop_frame_id == frame_id);
   });
 
   return_t value = doo();
@@ -282,44 +286,35 @@ Effect::resume_t raise(typename Effect::raise_t value) {
   if (never_throw) {
     throw 42;
   }
+#ifdef EFF_UNWIND_TRACE
+  fmt::println("finding handler for {}", demangle(typeid(Effect).name()));
+#endif
+  auto frame =
+      std::find_if(frames.rbegin(), frames.rend(), [&](const auto& frame) {
+#ifdef EFF_UNWIND_TRACE
+        fmt::println("try handler for {}, found {}",
+            demangle(typeid(Effect).name()), demangle(frame->effect.name()));
+#endif
+        return frame->effect == typeid(Effect);
+      });
 
-  auto fp = get_fp();
-
+  if (frame == frames.rend()) {
 #ifdef EFF_UNWIND_TRACE
-  print_frames("raise");
+    fmt::println("reached frame end, handler not found, aborting");
 #endif
-  while (fp != reinterpret_cast<uintptr_t>(nullptr)) {
-#ifdef EFF_UNWIND_TRACE
-    fmt::println("searching frame at fp={:#x} for {}", fp,
-        demangle(typeid(Effect).name()));
-#endif
-    auto frame_it = frames.find(fp);
-#ifdef EFF_UNWIND_TRACE
-    if (frame_it == frames.end()) {
-      fmt::println("no frame associated with fp={:#x}", fp);
-    } else if (frame_it->second->effect != typeid(Effect)) {
-      fmt::println("frame on fp={:#x} is for {}", fp,
-          demangle(frame_it->second->effect.name()));
-    }
-#endif
-    if (frame_it != frames.end() &&
-        frame_it->second->effect == typeid(Effect)) {
-      auto& frame = frame_it->second;
-      raise_context<typename Effect::resume_t> ctx;
-      if (setjmp(ctx.jmp) == 0) {
-        return static_cast<handler_frame_invoke<Effect>&>(*frame).invoke(
-            value, ctx);
-      } else {
-        return std::move(ctx.value);
-      }
-    }
-    fp = *reinterpret_cast<uintptr_t*>(fp);
+    abort();
   }
 
-  // #ifdef EFF_UNWIND_TRACE
-  fmt::println("reached frame end, handler not found, aborting");
-  // #endif
-  abort();
+  raise_context<typename Effect::resume_t> ctx;
+  // TODO: setjmp only when needed (non-tail)
+  // 1.580 s ±  0.006 s vs 69.526 s
+  // use sigsetjmp to avoid sigprocmask to be faster (2.360 s ±  0.027 s)
+  if (sigsetjmp(ctx.jmp, 0) == 0) {
+    return static_cast<handler_frame_invoke<Effect>&>(**frame).invoke(
+        value, ctx);
+  } else {
+    return std::move(ctx.value);
+  }
 }
 
 constexpr _Unwind_Exception_Class EXCEPTION_CLASS = 0x58464f5845480000;
@@ -340,11 +335,15 @@ void yield_context<yield_t>::operator()(yield_t value) {
 #ifdef EFF_UNWIND_TRACE
   fmt::println(
       "yielding value = {} [{}]", value, demangle(frame.effect.name()));
+  print_frames("yield");
 #endif
   // resume is not called, meaning breaking
   // when break, need to do unwinding
   // step more to get to parent function to make caller returns
   auto target_fp = frame.resume_fp;
+#ifdef EFF_UNWIND_TRACE
+  fmt::println("target fp={:#x}", target_fp);
+#endif
   unw_cursor_t cur_cursor;
   unw_context_t uc;
   unw_getcontext(&uc);
@@ -380,6 +379,9 @@ void yield_context<yield_t>::operator()(yield_t value) {
               reinterpret_cast<struct _Unwind_Context*>(&cur_cursor));
 
       if (personalityResult == _URC_INSTALL_CONTEXT) {
+#ifdef EFF_UNWIND_TRACE
+        fmt::println("install context for fp={:#x}", fp);
+#endif
         unw_resume(&cur_cursor);
       }
     }
@@ -391,7 +393,8 @@ void yield_context<yield_t>::operator()(yield_t value) {
   unw_set_reg(&cur_cursor, UNW_AARCH64_X0, static_cast<unw_word_t>(value));
   unw_resume(&cur_cursor);
 
-  abort();  // unreachable
+  assert(false);  // unreachable
+  abort();
 }
 
 static void __resume_nontail(uint64_t sp, handler_resumption_frame* frame) {
@@ -403,13 +406,13 @@ static void __resume_nontail(uint64_t sp, handler_resumption_frame* frame) {
   std::copy(frame->saved_stack.begin(), frame->saved_stack.end(),
       reinterpret_cast<char*>(sp));
   frame->saved_stack.clear();
-  jmp_buf saved_jmp;
-  memcpy(saved_jmp, frame->saved_jmp, sizeof(jmp_buf));
+  sigjmp_buf saved_jmp;
+  memcpy(saved_jmp, frame->saved_jmp, sizeof(sigjmp_buf));
   delete frame;
   // trick the compiler it may not jump and thus could return
   static volatile bool always_jump = true;
   if (always_jump) {
-    longjmp(saved_jmp, 1);
+    siglongjmp(saved_jmp, 1);
   }
 }
 

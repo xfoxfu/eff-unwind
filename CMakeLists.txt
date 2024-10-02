@@ -50,7 +50,6 @@ if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang"
   target_compile_definitions(eff-unwind PUBLIC EFF_UNWIND_CONCEPT_CLANG_WORKAROUND)
 endif()
 
-
 function(add_test BIN_NAME SRC_FILE)
   add_executable(${BIN_NAME} ${SRC_FILE})
   target_compile_features(${BIN_NAME} PRIVATE cxx_std_20)

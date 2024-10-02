@@ -38,7 +38,7 @@ void parse() {
       raise<Stop>({});
     }
   }
-  abort();  // unreachable
+  assert(false);  // unreachable
 }
 
 void feed(int n) {
