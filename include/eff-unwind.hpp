@@ -21,7 +21,7 @@ void print_proc(const char* name, unw_cursor_t& proc_info);
 std::string demangle(const char* name);
 #endif
 
-// FIXME: make the templates support `void`
+// TODO: make the templates support `void`
 class unit_t {
  public:
   operator unw_word_t() { return 0; }
@@ -58,18 +58,21 @@ struct handler_resumption_frame;
 template <typename resume_t>
 struct raise_context;
 
-template <typename resume_t, typename yield_t>
+template <typename Effect, typename yield_t>
+  requires is_effect<Effect>
 class resume_context {
   handler_frame_base& handler_frame;
-  raise_context<resume_t>& ctx;
+  raise_context<typename Effect::resume_t>& ctx;
 
  public:
-  resume_context(handler_frame_base& handler_sp, raise_context<resume_t>& ctx)
+  resume_context(handler_frame_base& handler_sp,
+      raise_context<typename Effect::resume_t>& ctx)
       : handler_frame(handler_sp), ctx(ctx) {}
-  yield_t operator()(resume_t value);
+  yield_t operator()(Effect::resume_t value);
 };
 
-template <typename yield_t>
+template <typename Effect, typename yield_t>
+  requires(is_effect<Effect> && sizeof(yield_t) <= sizeof(uint64_t) * 2)
 class yield_context {
   handler_frame_base& frame;
 
@@ -83,14 +86,14 @@ concept is_handler_of_in_fn = is_effect<Effect> &&
     std::is_invocable_v<F,
         typename Effect::raise_t,
         resume_context<Effect, yield_t>,
-        yield_context<yield_t>> &&
+        yield_context<Effect, yield_t>> &&
     std::is_same_v<std::invoke_result_t<F,
                        typename Effect::raise_t,
                        resume_context<Effect, yield_t>,
-                       yield_context<yield_t>>,
+                       yield_context<Effect, yield_t>>,
         typename Effect::resume_t>;
 
-// FIXME: remove noinline to improve performance
+// TODO: remove noinline to improve performance
 template <typename return_t, typename Effect, typename F, typename H>
   requires(is_effect<Effect> && is_handler_of_in_fn<Effect, return_t, H>)
 __attribute__((noinline)) return_t do_handle(F doo, H handler);
@@ -141,36 +144,41 @@ struct handler_frame_invoke : public handler_frame_base {
       raise_context<typename Effect::resume_t>& ctx) = 0;
 };
 
-template <typename Effect>
-  requires is_effect<Effect>
-struct can_handle {};
+template <typename Effect, typename yield_t>
+struct handler_frame_yield : public handler_frame_invoke<Effect> {
+  yield_t yield_value;
+
+  handler_frame_yield(std::type_index effect,
+      uintptr_t resume_fp,
+      uintptr_t handler_sp)
+      : handler_frame_invoke<Effect>(effect, resume_fp, handler_sp) {}
+};
 
 extern uint64_t last_frame_id;
 extern std::vector<std::unique_ptr<handler_frame_base>> frames;
 
 template <typename Effect, typename Handler, typename yield_t>
   requires is_handler_of_in_fn<Effect, yield_t, Handler>
-struct handler_frame : public can_handle<Effect>,
-                       public handler_frame_invoke<Effect> {
+struct handler_frame : public handler_frame_yield<Effect, yield_t> {
   Handler handler;
 
   handler_frame(std::type_index effect,
       Handler handler,
       uintptr_t resume_fp,
       uintptr_t handler_sp)
-      : handler_frame_invoke<Effect>(effect, resume_fp, handler_sp),
+      : handler_frame_yield<Effect, yield_t>(effect, resume_fp, handler_sp),
         handler(handler) {}
 
   virtual Effect::resume_t invoke(Effect::raise_t in,
       raise_context<typename Effect::resume_t>& ctx) override {
-    return handler(in,
-        resume_context<typename Effect::resume_t, yield_t>(*this, ctx),
-        yield_context<yield_t>(*this));
+    return handler(in, resume_context<Effect, yield_t>(*this, ctx),
+        yield_context<Effect, yield_t>(*this));
   }
 };
 
-template <typename resume_t, typename yield_t>
-yield_t resume_context<resume_t, yield_t>::operator()(resume_t value) {
+template <typename Effect, typename yield_t>
+  requires is_effect<Effect>
+yield_t resume_context<Effect, yield_t>::operator()(Effect::resume_t value) {
   unw_word_t sp;
   unw_cursor_t cur_cursor;
   unw_context_t uc;
@@ -201,8 +209,13 @@ yield_t resume_context<resume_t, yield_t>::operator()(resume_t value) {
 #ifdef EFF_UNWIND_TRACE
     fmt::println("after resume");
 #endif
-    // TODO: give me yield value
-    return std::move(ctx.value);
+    auto yield_value =
+        static_cast<handler_frame_yield<Effect, yield_t>&>(handler_frame)
+            .yield_value;
+#ifdef EFF_UNWIND_TRACE
+    fmt::println("resume_context returning = {}", yield_value);
+#endif
+    return std::move(yield_value);
   }
 }
 
@@ -234,6 +247,8 @@ return_t do_handle(F doo, H handler) {
       typeid(Effect), handler, *reinterpret_cast<uint64_t*>(fp), sp);
   auto frame_id = frame->id;
   frames.push_back(std::move(frame));
+  auto& frame_yield =
+      static_cast<handler_frame_yield<Effect, return_t>&>(*frames.back());
 
   auto guard = sg::make_scope_guard([fp, sp, frame_id] {
     auto& frame = frames.back();
@@ -274,6 +289,7 @@ return_t do_handle(F doo, H handler) {
   });
 
   return_t value = doo();
+  frame_yield.yield_value = std::move(value);
 
   return value;
 }
@@ -326,12 +342,16 @@ _Unwind_Reason_Code eff_stop_fn(int version,
     struct _Unwind_Context* context,
     void* stop_parameter);
 
-template <typename yield_t>
-yield_context<yield_t>::yield_context(handler_frame_base& frame)
+template <typename Effect, typename yield_t>
+  requires(is_effect<Effect> && sizeof(yield_t) <= sizeof(uint64_t) * 2)
+yield_context<Effect, yield_t>::yield_context(handler_frame_base& frame)
     : frame(frame) {}
 
-template <typename yield_t>
-void yield_context<yield_t>::operator()(yield_t value) {
+template <typename Effect, typename yield_t>
+  requires(is_effect<Effect> && sizeof(yield_t) <= sizeof(uint64_t) * 2)
+void yield_context<Effect, yield_t>::operator()(yield_t value) {
+  static_cast<handler_frame_yield<effect<Effect, yield_t>, yield_t>&>(frame)
+      .yield_value = value;
 #ifdef EFF_UNWIND_TRACE
   fmt::println(
       "yielding value = {} [{}]", value, demangle(frame.effect.name()));
@@ -390,6 +410,7 @@ void yield_context<yield_t>::operator()(yield_t value) {
 #ifdef EFF_UNWIND_TRACE
   print_proc("unw_resume", cur_cursor);
 #endif
+  // TODO: set value based on yield
   unw_set_reg(&cur_cursor, UNW_AARCH64_X0, static_cast<unw_word_t>(value));
   unw_resume(&cur_cursor);
 

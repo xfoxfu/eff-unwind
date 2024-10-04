@@ -8,7 +8,7 @@
 struct Operator : public effect<int, unit_t> {};
 
 int loop(int n, int s) {
-  for (int i = 0; i < n; i++) {
+  for (int i = n; i > 0; i--) {
     raise<Operator>(i);
   }
 
@@ -24,10 +24,11 @@ int run(int n, int s) {
 }
 
 int repeat(int n) {
-  for (int i = 0; i < 1000; i++) {
-    run(n, 0);
+  int ret = 0;
+  for (int i = 0; i < 1; i++) {
+    ret = run(n, 0);
   }
-  return 0;
+  return ret;
 }
 
 int main(int, char** argv) {
