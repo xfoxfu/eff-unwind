@@ -68,8 +68,12 @@ _Unwind_Reason_Code eff_stop_fn(int version,
     exceptionObject->exception_cleanup = nullptr;
 
     auto cursor = reinterpret_cast<unw_cursor_t*>(context);
-    // TODO: support more complex calling conventions for >64bit values.
+
+#ifdef EFF_UNWIND_TRACE
+    fmt::println("set_x0 = {:#x}, set_x1 = {:#x}", frame.set_x0, frame.set_x1);
+#endif
     unw_set_reg(cursor, UNW_AARCH64_X0, frame.set_x0);
+    unw_set_reg(cursor, UNW_AARCH64_X1, frame.set_x1);
 #ifdef EFF_UNWIND_TRACE
     unw_word_t ip;
     unw_get_reg(cursor, UNW_AARCH64_PC, &ip);

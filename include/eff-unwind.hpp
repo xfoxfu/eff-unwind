@@ -93,10 +93,10 @@ concept is_handler_of_in_fn = is_effect<Effect> &&
                        yield_context<Effect, yield_t>>,
         typename Effect::resume_t>;
 
-// TODO: remove noinline to improve performance
 template <typename return_t, typename Effect, typename F, typename H>
   requires(is_effect<Effect> && is_handler_of_in_fn<Effect, return_t, H>)
-__attribute__((noinline)) return_t do_handle(F doo, H handler);
+// set optnone to prevent inlining & IPA const fold
+__attribute__((optnone)) return_t do_handle(F doo, H handler);
 
 // ===== implementation =====
 
@@ -109,9 +109,12 @@ struct raise_context {
 struct handler_frame_found {
   const char* effect_typename;
   unw_word_t set_x0;
+  unw_word_t set_x1;
 
-  handler_frame_found(const char* effect_typename, unw_word_t set_x0)
-      : effect_typename(effect_typename), set_x0(set_x0) {}
+  handler_frame_found(const char* effect_typename,
+      unw_word_t set_x0,
+      unw_word_t set_x1)
+      : effect_typename(effect_typename), set_x0(set_x0), set_x1(set_x1) {}
 };
 
 struct handler_resumption_frame {
@@ -291,7 +294,7 @@ return_t do_handle(F doo, H handler) {
   return_t value = doo();
   frame_yield.yield_value = std::move(value);
 
-  return value;
+  return frame_yield.yield_value;
 }
 
 template <typename Effect>
@@ -374,9 +377,16 @@ void yield_context<Effect, yield_t>::operator()(yield_t value) {
   unw_word_t sp;
   unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &sp);
   ex->private_2 = target_fp;
+  uint64_t set_x[2];
+  memcpy(set_x, &value, sizeof(value));
+  unw_word_t set_x0 = set_x[0];
+  unw_word_t set_x1 = set_x[1];
+#ifdef EFF_UNWIND_TRACE
+  fmt::println("set_x0 = {:#x}, set_x1 = {:#x}", set_x0, set_x1);
+#endif
   ex->exception_cleanup =
       (decltype(ex->exception_cleanup))(new handler_frame_found(
-          frame.effect.name(), static_cast<unw_word_t>(value)));
+          frame.effect.name(), set_x0, set_x1));
   int unw_error;
   while ((unw_error = unw_step(&cur_cursor)) > 0) {
     unw_proc_info_t pi;
@@ -409,9 +419,10 @@ void yield_context<Effect, yield_t>::operator()(yield_t value) {
 
 #ifdef EFF_UNWIND_TRACE
   print_proc("unw_resume", cur_cursor);
+  fmt::println("unw_resume set_x0 = {:#x}, set_x1 = {:#x}", set_x0, set_x1);
 #endif
-  // TODO: set value based on yield
-  unw_set_reg(&cur_cursor, UNW_AARCH64_X0, static_cast<unw_word_t>(value));
+  unw_set_reg(&cur_cursor, UNW_AARCH64_X0, set_x0);
+  unw_set_reg(&cur_cursor, UNW_AARCH64_X1, set_x1);
   unw_resume(&cur_cursor);
 
   assert(false);  // unreachable

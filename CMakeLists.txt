@@ -58,6 +58,8 @@ function(add_test BIN_NAME SRC_FILE)
 endfunction()
 
 add_test(test_multi "test/micro/multi.cpp")
+add_test(test_large_return "test/micro/large_return.cpp")
+add_test(test_small_return "test/micro/small_return.cpp")
 # add_test(test_two_raise "test/micro/two_raise.cpp")
 add_test(countdown "test/countdown.cpp")
 add_test(fibonacci_recursive "test/fibonacci_recursive.cpp")
