@@ -4,7 +4,6 @@
 #include <iostream>
 #include <tuple>
 #include "eff-unwind.hpp"
-#include "fmt/core.h"
 
 class flip : public effect<unit_t, bool> {};
 template <typename a>
@@ -23,11 +22,8 @@ int choice(int n) {
 }
 
 std::tuple<int, int, int> triple(int n, int s) {
-  fmt::println("choice on i");
   auto i = choice(n);
-  fmt::println("choice on j");
   auto j = choice(i - 1);
-  fmt::println("choice on k");
   auto k = choice(j - 1);
   if (i + j + k == s) {
     return {i, j, k};
@@ -43,7 +39,6 @@ int hash(std::tuple<int, int, int> t) {
 }
 
 int run(int n, int s) {
-  int i = 0;
   return do_handle<int, flip>(
       [&]() -> int {
         return do_handle<int, fail<int>>(
@@ -53,12 +48,10 @@ int run(int n, int s) {
             },
             [](int x, auto resume, auto yield) -> int { yield(0); });
       },
-      [&i](unit_t, auto resume, auto yield) -> bool {
-        i += 1;
-        fmt::println("resume=true [{}]", i);
-        resume(true);
-        fmt::println("resume=false [{}]", i);
-        return false;
+      [](unit_t, auto resume, auto yield) -> bool {
+        auto v1 = resume(true);
+        auto v2 = resume(false);
+        yield((v1 + v2) % 1000000007);
       });
 }
 

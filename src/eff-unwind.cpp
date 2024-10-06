@@ -31,7 +31,7 @@ auto fmt::formatter<unit_t>::format(unit_t c, format_context& ctx) const
 uint64_t last_frame_id = 0;
 
 // TODO: add mutex guard for frame
-std::vector<std::unique_ptr<handler_frame_base>> frames;
+std::vector<std::shared_ptr<handler_frame_base>> frames;
 
 handler_frame_base::handler_frame_base(std::type_index effect,
     uintptr_t resume_fp,

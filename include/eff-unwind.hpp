@@ -129,6 +129,7 @@ struct handler_frame_found {
 struct handler_resumption_frame {
   sigjmp_buf saved_jmp;
   std::vector<char> saved_stack;
+  std::vector<std::shared_ptr<handler_frame_base>> saved_frames;
 };
 
 struct handler_frame_base {
@@ -168,7 +169,7 @@ struct handler_frame_yield : public handler_frame_invoke<Effect> {
 };
 
 extern uint64_t last_frame_id;
-extern std::vector<std::unique_ptr<handler_frame_base>> frames;
+extern std::vector<std::shared_ptr<handler_frame_base>> frames;
 
 template <typename Effect, typename Handler, typename yield_t>
   requires is_handler_of_in_fn<Effect, yield_t, Handler>
@@ -206,6 +207,7 @@ yield_t resume_context<Effect, yield_t>::operator()(Effect::resume_t value) {
   handler_frame.resumption_frames.push_back(handler_resumption_frame());
   auto& resumption_frame = handler_frame.resumption_frames.back();
   resumption_frame.saved_stack.resize(sp2 - sp);
+  resumption_frame.saved_frames = frames;
 #ifdef EFF_UNWIND_TRACE
   print_frames("save_stack");
   fmt::println("saved stack = {:#x} - {:#x}", sp, sp2);
@@ -256,7 +258,7 @@ return_t do_handle(F doo, H handler) {
   auto fp = get_fp();
   auto sp = get_sp();
 
-  auto frame = std::make_unique<handler_frame<Effect, H, return_t>>(
+  auto frame = std::make_shared<handler_frame<Effect, H, return_t>>(
       typeid(Effect), handler, *reinterpret_cast<uint64_t*>(fp), sp);
   auto frame_id = frame->id;
   frames.push_back(std::move(frame));
@@ -277,6 +279,7 @@ return_t do_handle(F doo, H handler) {
       rframe = new handler_resumption_frame;
       *rframe = std::move(frames.back()->resumption_frames.back());
       frames.back()->resumption_frames.pop_back();
+      frames = rframe->saved_frames;
 
       uint64_t nsp;
       asm volatile("mov %0, sp" : "=r"(nsp));
@@ -336,6 +339,8 @@ Effect::resume_t raise(typename Effect::raise_t value) {
   }
 
   raise_context<typename Effect::resume_t> ctx;
+  // This will affect performance by
+  // 2.320 s ±  0.010 s vs 3.460 s ±  0.046 s
   for (auto frame_it = frames.rbegin();
        frame_it != frames.rend() && (**frame_it).id >= (**frame).id;
        frame_it++) {
