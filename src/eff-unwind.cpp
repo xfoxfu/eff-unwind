@@ -1,5 +1,6 @@
 #include "eff-unwind.hpp"
 #include <libunwind.h>
+#include <cstdint>
 #include <typeindex>
 
 #ifdef EFF_UNWIND_TRACE
@@ -37,6 +38,7 @@ handler_frame_base::handler_frame_base(std::type_index effect,
     uintptr_t handler_sp)
     : effect(effect), resume_fp(resume_fp), handler_sp(handler_sp) {
   id = last_frame_id++;
+  masked = false;
 }
 
 _Unwind_Reason_Code eff_stop_fn(int version,

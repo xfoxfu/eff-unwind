@@ -1,13 +1,13 @@
 #include "eff-unwind.hpp"
 #include "fmt/core.h"
 
-typedef uint64_t unit_t;
+struct yield : public effect<uint64_t, unit_t> {};
 
 struct generator {
   uint64_t value;
-  std::optional<saved_resumption> resumption;
+  std::optional<saved_resumption<yield>> resumption;
 
-  explicit generator(uint64_t value, saved_resumption resumption)
+  explicit generator(uint64_t value, saved_resumption<yield> resumption)
       : value(value), resumption(resumption) {}
   generator() : resumption({}) {}
 
@@ -15,7 +15,7 @@ struct generator {
     if (resumption.has_value()) {
       auto res = resumption.value();
       resumption.reset();
-      res.resume();
+      std::move(res).resume({});
       abort();  // unreachable
     } else {
       return {};
@@ -23,28 +23,21 @@ struct generator {
   }
 };
 
-struct yield : public effect<uint64_t, unit_t> {};
-
-with_effect<unit_t, yield> iterate(int n) {
-  effect_ctx<unit_t, yield> ctx;
+void iterate(int n) {
   for (int i = 0; i < n; i++) {
-    ctx.raise<yield>(0);
+    raise<yield>(0);
   }
-  return ctx.ret(0);
 }
 
 generator generate() {
-  auto g = handle<yield>([](uint64_t value, auto ctx) -> generator {
-    auto resumption = ctx.save_resumption();
-    if (!resumption.has_value()) {
-      // resume
-      return {};
-    }
-    // saved resumption
-    BREAK(generator(value, resumption.value()));
-  });
-  iterate(5);
-  return generator();
+  return do_handle<generator, yield>(
+      []() {
+        iterate(5);
+        return generator();
+      },
+      [](uint64_t value, auto resume, auto yield) -> unit_t {
+        yield(generator(value, resume.save_resumption()));
+      });
 }
 
 int main() {

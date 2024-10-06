@@ -98,6 +98,15 @@ template <typename return_t, typename Effect, typename F, typename H>
 // set optnone to prevent inlining & IPA const fold
 __attribute__((optnone)) return_t do_handle(F doo, H handler);
 
+template <typename Effect>
+  requires is_effect<Effect>
+class saved_resumption {
+  sigjmp_buf jmp;
+
+ public:
+  void resume(Effect::resume_t value) &&;
+};
+
 // ===== implementation =====
 
 template <typename resume_t>
@@ -128,6 +137,7 @@ struct handler_frame_base {
   uintptr_t resume_fp;
   uintptr_t handler_sp;
   std::vector<handler_resumption_frame> resumption_frames;
+  bool masked;
 
   handler_frame_base(std::type_index effect,
       uintptr_t resume_fp,
@@ -311,10 +321,11 @@ Effect::resume_t raise(typename Effect::raise_t value) {
   auto frame =
       std::find_if(frames.rbegin(), frames.rend(), [&](const auto& frame) {
 #ifdef EFF_UNWIND_TRACE
-        fmt::println("try handler for {}, found {}",
-            demangle(typeid(Effect).name()), demangle(frame->effect.name()));
+        fmt::println("try handler for {}, found {} [masked={}]",
+            demangle(typeid(Effect).name()), demangle(frame->effect.name()),
+            frame->masked);
 #endif
-        return frame->effect == typeid(Effect);
+        return !frame->masked && frame->effect == typeid(Effect);
       });
 
   if (frame == frames.rend()) {
@@ -325,6 +336,22 @@ Effect::resume_t raise(typename Effect::raise_t value) {
   }
 
   raise_context<typename Effect::resume_t> ctx;
+  for (auto frame_it = frames.rbegin();
+       frame_it != frames.rend() && (**frame_it).id >= (**frame).id;
+       frame_it++) {
+    (**frame_it).masked = true;
+  }
+  std::pair<uintptr_t, uintptr_t> mask_range = {
+      frames.back()->id, (**frame).id};
+  auto sg = sg::make_scope_guard([frame, mask_range] {
+    for (auto frame_it = frames.rbegin(); frame_it != frames.rend();
+         frame_it++) {
+      if ((**frame_it).id <= mask_range.first &&
+          (**frame_it).id >= mask_range.second) {
+        (**frame_it).masked = false;
+      }
+    }
+  });
   // TODO: setjmp only when needed (non-tail)
   // 1.580 s ±  0.006 s vs 69.526 s
   // use sigsetjmp to avoid sigprocmask to be faster (2.360 s ±  0.027 s)
@@ -356,8 +383,7 @@ void yield_context<Effect, yield_t>::operator()(yield_t value) {
   static_cast<handler_frame_yield<effect<Effect, yield_t>, yield_t>&>(frame)
       .yield_value = value;
 #ifdef EFF_UNWIND_TRACE
-  fmt::println(
-      "yielding value = {} [{}]", value, demangle(frame.effect.name()));
+  fmt::println("yielding [{}]", demangle(frame.effect.name()));
   print_frames("yield");
 #endif
   // resume is not called, meaning breaking

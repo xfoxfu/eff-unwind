@@ -19,7 +19,7 @@ int primes(int i, int n, int a) {
             return false;
           } else {
             auto val = raise<Prime>(e);
-            return raise<Prime>(e);
+            return val;
           }
         });
   } else {
