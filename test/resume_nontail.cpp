@@ -25,7 +25,7 @@ int run(int n, int s) {
 
 int repeat(int n) {
   int ret = 0;
-  for (int i = 0; i < 1; i++) {
+  for (int i = 0; i < 1000; i++) {
     ret = run(n, 0);
   }
   return ret;

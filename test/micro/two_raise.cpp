@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "eff-unwind.hpp"
 #include "fmt/core.h"
 
@@ -7,22 +8,24 @@ struct RAII {
 
 struct Exception : public effect<uint64_t, uint64_t> {};
 
-with_effect<int, Exception> foobar() {
-  effect_ctx<int, Exception> ctx;
-  auto num1 = ctx.raise<Exception>(0);
-  auto num2 = ctx.raise<Exception>(0);
-  return ctx.ret(56);
+int foobar() {
+  auto num1 = raise<Exception>(0);
+  auto num2 = raise<Exception>(0);
+  return 56;
 }
 
 uint64_t has_handler() {
-  auto guard = handle<Exception>([](uint64_t in, auto ctx) -> uint64_t {
-    RESUME(42);
-    fmt::println("non-tail resumption");
-    return 0;
-  });
-  int num = 42;
-  int ret = foobar().value;
-  return 0;
+  return do_handle<uint64_t, Exception>(
+      []() {
+        int num = 42;
+        int ret = foobar();
+        return 0;
+      },
+      [](uint64_t in, auto resume, auto yield) -> uint64_t {
+        resume(42);
+        fmt::println("non-tail resumption");
+        return 0;
+      });
 }
 
 void test() {
