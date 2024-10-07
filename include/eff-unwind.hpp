@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <scope_guard.hpp>
 #include <type_traits>
 #include <typeindex>
@@ -138,13 +139,13 @@ struct handler_frame_base {
   uintptr_t resume_fp;
   uintptr_t handler_sp;
   std::vector<handler_resumption_frame> resumption_frames;
-  bool masked;
+  uintptr_t parent;
 
   handler_frame_base(std::type_index effect,
       uintptr_t resume_fp,
       uintptr_t handler_sp);
 
-  virtual ~handler_frame_base() {}
+  virtual ~handler_frame_base();
 };
 
 template <typename Effect>
@@ -321,15 +322,21 @@ Effect::resume_t raise(typename Effect::raise_t value) {
 #ifdef EFF_UNWIND_TRACE
   fmt::println("finding handler for {}", demangle(typeid(Effect).name()));
 #endif
-  auto frame =
-      std::find_if(frames.rbegin(), frames.rend(), [&](const auto& frame) {
+  auto frame = frames.rbegin();
+  for (; frame != frames.rend(); frame++) {
 #ifdef EFF_UNWIND_TRACE
-        fmt::println("try handler for {}, found {} [masked={}]",
-            demangle(typeid(Effect).name()), demangle(frame->effect.name()),
-            frame->masked);
+    fmt::println("try handler for {}, found {}",
+        demangle(typeid(Effect).name()), demangle((*frame)->effect.name()));
 #endif
-        return !frame->masked && frame->effect == typeid(Effect);
-      });
+    if ((*frame)->parent > 0) {
+#ifdef EFF_UNWIND_TRACE
+      fmt::println("search backward by {}", (*frame)->parent - 1);
+#endif
+      frame += (*frame)->parent - 1;
+    } else if ((*frame)->effect == typeid(Effect)) {
+      break;
+    }
+  }
 
   if (frame == frames.rend()) {
 #ifdef EFF_UNWIND_TRACE
@@ -338,31 +345,23 @@ Effect::resume_t raise(typename Effect::raise_t value) {
     abort();
   }
 
+  auto& hframe = static_cast<handler_frame_invoke<Effect>&>(**frame);
   raise_context<typename Effect::resume_t> ctx;
   // This will affect performance by
-  // 2.320 s ±  0.010 s vs 3.460 s ±  0.046 s
-  for (auto frame_it = frames.rbegin();
-       frame_it != frames.rend() && (**frame_it).id >= (**frame).id;
-       frame_it++) {
-    (**frame_it).masked = true;
-  }
-  std::pair<uintptr_t, uintptr_t> mask_range = {
-      frames.back()->id, (**frame).id};
-  auto sg = sg::make_scope_guard([frame, mask_range] {
-    for (auto frame_it = frames.rbegin(); frame_it != frames.rend();
-         frame_it++) {
-      if ((**frame_it).id <= mask_range.first &&
-          (**frame_it).id >= mask_range.second) {
-        (**frame_it).masked = false;
-      }
-    }
-  });
+  // 2.320 s ±  0.010 s vs 2.510 s ±  0.039 s
+  auto delta = frame - frames.rbegin() + 1;
+  auto& pframe = frames.back();
+  auto eparent = pframe->parent;
+  pframe->parent = delta;
+  auto sg = pframe->parent != eparent
+      ? std::make_optional(sg::make_scope_guard(
+            [delta, &pframe, eparent]() { pframe->parent = eparent; }))
+      : std::nullopt;
   // TODO: setjmp only when needed (non-tail)
   // 1.580 s ±  0.006 s vs 69.526 s
   // use sigsetjmp to avoid sigprocmask to be faster (2.360 s ±  0.027 s)
   if (sigsetjmp(ctx.jmp, 0) == 0) {
-    return static_cast<handler_frame_invoke<Effect>&>(**frame).invoke(
-        value, ctx);
+    return hframe.invoke(value, ctx);
   } else {
     return std::move(ctx.value);
   }

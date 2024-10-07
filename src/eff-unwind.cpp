@@ -38,8 +38,10 @@ handler_frame_base::handler_frame_base(std::type_index effect,
     uintptr_t handler_sp)
     : effect(effect), resume_fp(resume_fp), handler_sp(handler_sp) {
   id = last_frame_id++;
-  masked = false;
+  parent = 0;
 }
+
+handler_frame_base::~handler_frame_base() {}
 
 _Unwind_Reason_Code eff_stop_fn(int version,
     _Unwind_Action actions,
