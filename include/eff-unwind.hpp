@@ -271,15 +271,22 @@ struct handler_frame4 : public handler_frame_yield<Effect, yield_t> {
   }
 };
 
+inline uintptr_t get_fp() {
+  uint64_t fp;
+  asm volatile("mov %0, fp" : "=r"(fp));
+  return fp;
+}
+
+inline uintptr_t get_sp() {
+  uint64_t sp;
+  asm volatile("mov %0, sp" : "=r"(sp));
+  return sp;
+}
+
 template <typename Effect, typename yield_t>
   requires is_effect<Effect>
 yield_t resume_context<Effect, yield_t>::operator()(Effect::resume_t value) {
-  unw_word_t sp;
-  unw_cursor_t cur_cursor;
-  unw_context_t uc;
-  unw_getcontext(&uc);
-  unw_init_local(&cur_cursor, &uc);
-  unw_get_reg(&cur_cursor, UNW_AARCH64_SP, &sp);
+  auto sp = get_sp();
   // https://community.arm.com/arm-community-blogs/b/architectures-and-processors-blog/posts/using-the-stack-in-aarch32-and-aarch64
   // The stack is full-descending, meaning that sp – the stack pointer –
   // points to the most recently pushed object on the stack, and it grows
@@ -317,18 +324,6 @@ yield_t resume_context<Effect, yield_t>::operator()(Effect::resume_t value) {
 
 __attribute__((always_inline)) inline void resume_nontail(ptrdiff_t,
     handler_resumption_frame*);
-
-inline uintptr_t get_fp() {
-  uint64_t fp;
-  asm volatile("mov %0, fp" : "=r"(fp));
-  return fp;
-}
-
-inline uintptr_t get_sp() {
-  uint64_t sp;
-  asm volatile("mov %0, sp" : "=r"(sp));
-  return sp;
-}
 
 template <typename yield_t, typename Effect, typename Handler>
   requires is_handler_of_in_fn<Effect, yield_t, Handler> &&
