@@ -20,7 +20,7 @@ uint64_t run(int n) {
         range(0, n);
         return s;
       },
-      [&s](int e, auto resume, auto yield) -> unit_t {
+      [&s](int e) -> unit_t {
         s += e;
         return {};
       });

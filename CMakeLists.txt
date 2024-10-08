@@ -55,6 +55,7 @@ function(add_test BIN_NAME SRC_FILE)
   target_compile_features(${BIN_NAME} PRIVATE cxx_std_20)
   set_target_properties(${BIN_NAME} PROPERTIES CXX_EXTENSIONS OFF)
   target_link_libraries(${BIN_NAME} PRIVATE eff-unwind)
+  target_compile_options(${BIN_NAME} PRIVATE -Wall -Wextra)
 endfunction()
 
 add_test(test_multi "test/micro/multi.cpp")

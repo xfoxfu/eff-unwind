@@ -8,13 +8,12 @@
 struct Prime : public effect<uint64_t, bool> {};
 
 int primes(int i, int n, int a) {
-  int ctx;
   if (i >= n) {
     return a;
   }
   if (raise<Prime>(i)) {
     return do_handle<int, Prime>([&]() { return primes(i + 1, n, a + i); },
-        [i](int e, auto resume, auto yield) -> bool {
+        [i](int e) -> bool {
           if (e % i == 0) {
             return false;
           } else {
@@ -28,8 +27,8 @@ int primes(int i, int n, int a) {
 }
 
 int run(int n) {
-  return do_handle<int, Prime>([&]() { return primes(2, n, 0); },
-      [](int e, auto resume, auto yield) -> bool { return true; });
+  return do_handle<int, Prime>(
+      [&]() { return primes(2, n, 0); }, [](int) -> bool { return true; });
 }
 
 int main(int, char** argv) {

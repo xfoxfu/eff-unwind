@@ -7,13 +7,13 @@
 #include <iostream>
 #include "eff-unwind.hpp"
 
-struct Get : public effect<uint64_t, uint64_t> {};
+struct Get : public effect<unit_t, uint64_t> {};
 struct Set : public effect<uint64_t, uint64_t> {};
 
 int countdown() {
-  auto i = raise<Get>(0);
+  auto i = raise<Get>({});
   while (true) {
-    i = raise<Get>(0);
+    i = raise<Get>({});
     if (i == 0) {
       return i;
     } else {
@@ -30,12 +30,12 @@ int run(uint64_t n) {
   return do_handle<int, Get>(
       [&]() -> int {
         return do_handle<int, Set>([]() -> int { return countdown(); },
-            [&](uint64_t in, auto ctx, auto b) -> uint64_t {
+            [&](uint64_t in) -> uint64_t {
               s = in;
               return s;
             });
       },
-      [&](uint64_t in, auto ctx, auto b) -> uint64_t { return s; });
+      [&](unit_t) -> uint64_t { return s; });
 }
 
 int main(int, char** argv) {

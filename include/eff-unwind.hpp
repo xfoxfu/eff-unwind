@@ -84,20 +84,26 @@ class yield_context {
 
 template <typename Effect, typename yield_t, typename F>
 concept is_handler_of_in_fn = is_effect<Effect> &&
-    std::is_invocable_v<F,
-        typename Effect::raise_t,
-        resume_context<Effect, yield_t>,
-        yield_context<Effect, yield_t>> &&
-    std::is_same_v<std::invoke_result_t<F,
-                       typename Effect::raise_t,
-                       resume_context<Effect, yield_t>,
-                       yield_context<Effect, yield_t>>,
-        typename Effect::resume_t>;
+    (std::is_same_v<std::invoke_result_t<F,
+                        typename Effect::raise_t,
+                        resume_context<Effect, yield_t>,
+                        yield_context<Effect, yield_t>>,
+         typename Effect::resume_t> ||
+        std::is_same_v<std::invoke_result_t<F,
+                           typename Effect::raise_t,
+                           yield_context<Effect, yield_t>>,
+            typename Effect::resume_t> ||
+        std::is_same_v<std::invoke_result_t<F,
+                           typename Effect::raise_t,
+                           resume_context<Effect, yield_t>>,
+            typename Effect::resume_t> ||
+        std::is_same_v<std::invoke_result_t<F, typename Effect::raise_t>,
+            typename Effect::resume_t>);
 
 template <typename return_t, typename Effect, typename F, typename H>
   requires(is_effect<Effect> && is_handler_of_in_fn<Effect, return_t, H>)
 // set optnone to prevent inlining & IPA const fold
-__attribute__((optnone)) return_t do_handle(F doo, H handler);
+__attribute__((optnone)) return_t do_handle(F&& doo, H&& handler);
 
 template <typename Effect>
   requires is_effect<Effect>
@@ -140,6 +146,7 @@ struct handler_frame_base {
   uintptr_t handler_sp;
   std::vector<handler_resumption_frame> resumption_frames;
   uintptr_t parent;
+  bool no_nontail_resume;
 
   handler_frame_base(std::type_index effect,
       uintptr_t resume_fp,
@@ -173,21 +180,94 @@ extern uint64_t last_frame_id;
 extern std::vector<std::shared_ptr<handler_frame_base>> frames;
 
 template <typename Effect, typename Handler, typename yield_t>
-  requires is_handler_of_in_fn<Effect, yield_t, Handler>
+  requires is_handler_of_in_fn<Effect, yield_t, Handler> &&
+    std::invocable<Handler,
+        typename Effect::raise_t,
+        resume_context<Effect, yield_t>,
+        yield_context<Effect, yield_t>>
 struct handler_frame : public handler_frame_yield<Effect, yield_t> {
   Handler handler;
 
   handler_frame(std::type_index effect,
-      Handler handler,
+      Handler&& handler,
       uintptr_t resume_fp,
       uintptr_t handler_sp)
       : handler_frame_yield<Effect, yield_t>(effect, resume_fp, handler_sp),
-        handler(handler) {}
+        handler(handler) {
+    handler_frame_base::no_nontail_resume = false;
+  }
 
   virtual Effect::resume_t invoke(Effect::raise_t in,
       raise_context<typename Effect::resume_t>& ctx) override {
     return handler(in, resume_context<Effect, yield_t>(*this, ctx),
         yield_context<Effect, yield_t>(*this));
+  }
+};
+
+template <typename Effect, typename Handler, typename yield_t>
+  requires is_handler_of_in_fn<Effect, yield_t, Handler> &&
+    std::invocable<Handler, typename Effect::raise_t>
+struct handler_frame2 : public handler_frame_yield<Effect, yield_t> {
+  Handler handler;
+
+  handler_frame2(std::type_index effect,
+      Handler&& handler,
+      uintptr_t resume_fp,
+      uintptr_t handler_sp)
+      : handler_frame_yield<Effect, yield_t>(effect, resume_fp, handler_sp),
+        handler(handler) {
+    handler_frame_base::no_nontail_resume = true;
+  }
+
+  virtual Effect::resume_t invoke(Effect::raise_t in,
+      raise_context<typename Effect::resume_t>&) override {
+    return handler(in);
+  }
+};
+
+template <typename Effect, typename Handler, typename yield_t>
+  requires is_handler_of_in_fn<Effect, yield_t, Handler> &&
+    std::invocable<Handler,
+        typename Effect::raise_t,
+        resume_context<Effect, yield_t>>
+struct handler_frame3 : public handler_frame_yield<Effect, yield_t> {
+  Handler handler;
+
+  handler_frame3(std::type_index effect,
+      Handler&& handler,
+      uintptr_t resume_fp,
+      uintptr_t handler_sp)
+      : handler_frame_yield<Effect, yield_t>(effect, resume_fp, handler_sp),
+        handler(handler) {
+    handler_frame_base::no_nontail_resume = false;
+  }
+
+  virtual Effect::resume_t invoke(Effect::raise_t in,
+      raise_context<typename Effect::resume_t>& ctx) override {
+    return handler(in, resume_context<Effect, yield_t>(*this, ctx));
+  }
+};
+
+template <typename Effect, typename Handler, typename yield_t>
+  requires is_handler_of_in_fn<Effect, yield_t, Handler> &&
+    std::invocable<Handler,
+        typename Effect::raise_t,
+        yield_context<Effect, yield_t>>
+struct handler_frame4 : public handler_frame_yield<Effect, yield_t> {
+  Handler handler;
+
+  handler_frame4(std::type_index effect,
+      Handler&& handler,
+      uintptr_t resume_fp,
+      uintptr_t handler_sp)
+      : handler_frame_yield<Effect, yield_t>(effect, resume_fp, handler_sp),
+        handler(handler) {
+    handler_frame_base::no_nontail_resume = true;
+  }
+
+  virtual Effect::resume_t invoke(Effect::raise_t in,
+      raise_context<typename Effect::resume_t>&) override {
+    return handler(in, yield_context<Effect, yield_t>(*this));
   }
 };
 
@@ -250,25 +330,78 @@ inline uintptr_t get_sp() {
   return sp;
 }
 
+template <typename yield_t, typename Effect, typename Handler>
+  requires is_handler_of_in_fn<Effect, yield_t, Handler> &&
+    std::invocable<Handler,
+        typename Effect::raise_t,
+        resume_context<Effect, yield_t>,
+        yield_context<Effect, yield_t>>
+inline std::shared_ptr<handler_frame_base> make_handler_frame(Handler&& handler,
+    uint64_t fp,
+    uint64_t sp) {
+  return std::make_shared<handler_frame<Effect, Handler, yield_t>>(
+      typeid(Effect), std::forward<Handler>(handler),
+      *reinterpret_cast<uint64_t*>(fp), sp);
+}
+template <typename yield_t, typename Effect, typename Handler>
+  requires is_handler_of_in_fn<Effect, yield_t, Handler> &&
+    std::invocable<Handler, typename Effect::raise_t>
+inline std::shared_ptr<handler_frame_base> make_handler_frame(Handler&& handler,
+    uint64_t fp,
+    uint64_t sp) {
+  return std::make_shared<handler_frame2<Effect, Handler, yield_t>>(
+      typeid(Effect), std::forward<Handler>(handler),
+      *reinterpret_cast<uint64_t*>(fp), sp);
+}
+template <typename yield_t, typename Effect, typename Handler>
+  requires is_handler_of_in_fn<Effect, yield_t, Handler> &&
+    std::invocable<Handler,
+        typename Effect::raise_t,
+        resume_context<Effect, yield_t>>
+inline std::shared_ptr<handler_frame_base> make_handler_frame(Handler&& handler,
+    uint64_t fp,
+    uint64_t sp) {
+  return std::make_shared<handler_frame3<Effect, Handler, yield_t>>(
+      typeid(Effect), std::forward<Handler>(handler),
+      *reinterpret_cast<uint64_t*>(fp), sp);
+}
+template <typename yield_t, typename Effect, typename Handler>
+  requires is_handler_of_in_fn<Effect, yield_t, Handler> &&
+    std::invocable<Handler,
+        typename Effect::raise_t,
+        yield_context<Effect, yield_t>>
+inline std::shared_ptr<handler_frame_base> make_handler_frame(Handler&& handler,
+    uint64_t fp,
+    uint64_t sp) {
+  return std::make_shared<handler_frame4<Effect, Handler, yield_t>>(
+      typeid(Effect), std::forward<Handler>(handler),
+      *reinterpret_cast<uint64_t*>(fp), sp);
+}
+
 template <typename return_t, typename Effect, typename F, typename H>
   requires(is_effect<Effect> && is_handler_of_in_fn<Effect, return_t, H>)
-return_t do_handle(F doo, H handler) {
+return_t do_handle(F&& doo, H&& handler) {
   // The frame pointer (x29) is required for compatibility with fast stack
   // walking used by ETW and other services. It must point to the previous {x29,
   // x30} pair on the stack.
   auto fp = get_fp();
   auto sp = get_sp();
 
-  auto frame = std::make_shared<handler_frame<Effect, H, return_t>>(
-      typeid(Effect), handler, *reinterpret_cast<uint64_t*>(fp), sp);
+  auto frame = make_handler_frame<return_t, Effect>(handler, fp, sp);
+#ifndef NDEBUG
   auto frame_id = frame->id;
+#endif
   frames.push_back(std::move(frame));
   auto& frame_yield =
       static_cast<handler_frame_yield<Effect, return_t>&>(*frames.back());
 
-  auto guard = sg::make_scope_guard([fp, sp, frame_id] {
-    auto& frame = frames.back();
+#ifdef NDEBUG
+  auto guard = sg::make_scope_guard([sp] {
+#else
+  auto guard = sg::make_scope_guard([sp, frame_id] {
+#endif
 #ifdef EFF_UNWIND_TRACE
+    auto& frame = frames.back();
     fmt::println("destructor for handler of {} [{:#x}]",
         demangle(frame->effect.name()), fp);
     print_frames("destructor");
@@ -295,8 +428,9 @@ return_t do_handle(F doo, H handler) {
       resume_nontail(sp_delta, rframe);
     }
 
+#ifndef NDEBUG
     auto pop_frame_id = frames.back()->id;
-
+#endif
 #ifdef EFF_UNWIND_TRACE
     fmt::println(
         "remove handler for {}", demangle(frames.back()->effect.name()));
@@ -355,10 +489,13 @@ Effect::resume_t raise(typename Effect::raise_t value) {
   pframe->parent = delta;
   auto sg = pframe->parent != eparent
       ? std::make_optional(sg::make_scope_guard(
-            [delta, &pframe, eparent]() { pframe->parent = eparent; }))
+            [&pframe, eparent]() { pframe->parent = eparent; }))
       : std::nullopt;
-  // TODO: setjmp only when needed (non-tail)
-  // 1.580 s ±  0.006 s vs 69.526 s
+  // avoid setjmp if tail-resuming
+  if ((*frame)->no_nontail_resume) {
+    return hframe.invoke(value, ctx);
+  }
+  // 1.580 s ±  0.006 s vs 69.526 s (setjmp)
   // use sigsetjmp to avoid sigprocmask to be faster (2.360 s ±  0.027 s)
   if (sigsetjmp(ctx.jmp, 0) == 0) {
     return hframe.invoke(value, ctx);

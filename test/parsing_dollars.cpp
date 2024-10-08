@@ -48,7 +48,7 @@ void feed(int n) {
         parse();
         return unit_t();
       },
-      [&i, &j, &n](auto _, auto resume, auto yield) -> char_t {
+      [&i, &j, &n](auto) -> char_t {
         if (i > n) {
           raise<Stop>({});
         } else if (j == 0) {
@@ -69,7 +69,7 @@ void catchh(int n) {
         feed(n);
         return {};
       },
-      [](auto _, auto resume, auto yield) -> unit_t { yield({}); });
+      [](auto, yield_context<Stop, unit_t> yield) -> unit_t { yield({}); });
 }
 
 uint32_t sum(int n) {
@@ -79,7 +79,7 @@ uint32_t sum(int n) {
         catchh(n);
         return s;
       },
-      [&s](int e, auto resume, auto yield) -> unit_t {
+      [&s](int e) -> unit_t {
         s += e;
         return {};
       });
