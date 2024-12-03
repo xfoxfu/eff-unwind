@@ -5,7 +5,7 @@
 struct Exception : public effect<unit_t, unit_t> {};
 
 int foobar() {
-  auto num = raise<Exception>({});
+  raise<Exception>({});
   return 56;
 }
 

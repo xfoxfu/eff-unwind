@@ -3,8 +3,9 @@
 
 #include <iostream>
 #include <vector>
-#include "eff-unwind.hpp"
-#include "fmt/core.h"
+#include "cpp-effects/cpp-effects.h"
+
+namespace eff = cpp_effects;
 
 #ifdef TEST_RAII
 int x = 0;
@@ -13,7 +14,9 @@ struct RAII {
 };
 #endif
 
-struct Abort : public effect<int, unit_t> {};
+struct Abort : eff::command<> {
+  int value;
+};
 
 int product(std::vector<int>::const_iterator xs_begin,
     std::vector<int>::const_iterator xs_end) {
@@ -23,7 +26,7 @@ int product(std::vector<int>::const_iterator xs_begin,
   int product = 1;
   for (auto it = xs_begin; it != xs_end; it++) {
     if (*it == 0) {
-      raise<Abort>(0);
+      eff::invoke_command(Abort{{}, 0});
       abort();  // unreachable
       return 0;
     } else {
@@ -33,9 +36,16 @@ int product(std::vector<int>::const_iterator xs_begin,
   return product;
 }
 
+struct AbortHandler : eff::handler<int, int, Abort> {
+  int handle_command(Abort p, eff::resumption<int()>) override {
+    return p.value;
+  }
+  int handle_return(int v) override { return v; }
+};
+
 int run_product(std::vector<int>& xs) {
-  return do_handle<int, Abort>([&]() { return product(xs.begin(), xs.end()); },
-      [](auto r, auto resume, auto yield) -> unit_t { yield(r); });
+  return eff::handle<AbortHandler>(
+      [&]() { return product(xs.begin(), xs.end()); });
 }
 
 int run(int n) {

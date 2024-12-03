@@ -1,5 +1,8 @@
 // Test case "nqueens"
 // https://github.com/effect-handlers/effect-handlers-bench/blob/main/benchmarks/koka/nqueens/main.kk
+// Cannot be supported since memory management
+// nqueens(26656,0x20166b240) malloc: Double free of object 0x134804080
+// [1]    26656 abort      ../build/nqueens 12
 
 #include <iostream>
 #include <vector>
@@ -54,7 +57,7 @@ int run(int n) {
               yield(a);
             });
       },
-      [](unit_t _, auto resume, auto yield) -> unit_t { yield(0); });
+      [](unit_t, auto, auto yield) -> unit_t { yield(0); });
 }
 
 int main(int, char** argv) {

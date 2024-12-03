@@ -1,5 +1,8 @@
 .koka
+cpp-effects/*
+!cpp-effects/src
 
 *-kk
+*-mpeff
 *.json
 *.png
