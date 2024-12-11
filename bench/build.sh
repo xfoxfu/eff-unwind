@@ -1,37 +1,26 @@
 set -x
 
-for case in $(fd -e kk --format '{/.}'); do
-# for case in generator; do
-    if [[ "$case" = "test_exception" ]]; then
-        continue
-    fi
-    case $case in
-        countdown)           SIZE=200000000;;
-        fibonacci_recursive) SIZE=42;;
-        generator)           SIZE=25;;
-        handler_sieve)       SIZE=60000;; # SIZE=60000;;
-        iterator)            SIZE=40000000;;
-        nqueens)             SIZE=12;;
-        parsing_dollars)     SIZE=20000;;
-        product_early)       SIZE=100000;;
-        resume_nontail)      SIZE=2000;; # SIZE=20000;;
-        tree_explore)        SIZE=16;;
-        triples)             SIZE=100;; # SIZE=300;;
-    esac
-    hyperfine -r 10 --export-json $case.json -N "../build/$case $SIZE" "./koka/bin/$case-kk $SIZE" "./cpp-effects/bin/$case $SIZE"  # "./$case-mpeff $SIZE"
-    # python plot.py $case.json --labels eff-unwind,koka,cpp-effects -o $case.png
-    # echo "Running $case"
-    # echo $(./$case-kk $SIZE)
-done
+rm -rf koka/bin/*
+rm -rf cpp-effects/bin/*
+rm -rf ocaml/bin/*
 
-hyperfine -r 10 --export-json test_exception.json -N \
-    "../build/test_exception" \
-    "./koka/bin/test_exception-kk" \
-    "./cpp-effects/bin/test_exception" \
-    "./vanilla-cpp/bin/exception"
+export PATH="$HOME/.local/bin:$PATH"
+fd -e kk -x koka -O2 -c '{}' -o 'koka/bin/{/.}-kk'
+fd -e kk -x chmod +x 'koka/bin/{/.}-kk'
+cd ../build && ninja && cd ../bench
 
-hyperfine -r 10 --export-json test_exception2.json -N \
-    "../build/test_exception2" \
-    "./koka/bin/test_exception2-kk" \
-    "./cpp-effects/bin/test_exception2" \
-    "./vanilla-cpp/bin/exception2"
+# download and extract cpp-effects
+# https://github.com/maciejpirog/cpp-effects/archive/refs/heads/main.zip
+fd -e cpp -p cpp-effects -x clang++ 'cpp-effects/src/{/}' -std=c++17 -O2 \
+  -o 'cpp-effects/bin/{/.}' \
+  -Icpp-effects/include \
+  -I/opt/homebrew/opt/boost/include \
+  -L/opt/homebrew/opt/boost/lib \
+  -lboost_fiber-mt \
+  -lboost_context-mt \
+  -lboost_coroutine-mt
+
+#  -I/opt/homebrew/Cellar/fmt/11.0.2/include -L/opt/homebrew/Cellar/fmt/11.0.2/lib -lfmt
+clang++ vanilla-cpp/src/exception.cpp -std=c++17 -O2 -o vanilla-cpp/bin/exception
+
+fd -e ml -p ocaml -x ocamlopt -O3 -o 'ocaml/bin/{/.}' 'ocaml/src/{/}'
