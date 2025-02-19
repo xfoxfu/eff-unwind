@@ -59,6 +59,16 @@ struct handler_resumption_frame;
 template <typename resume_t>
 struct raise_context;
 
+template <typename Effect>
+  requires is_effect<Effect>
+class saved_resumption {
+  sigjmp_buf saved_jmp;
+  std::vector<char> saved_stack;
+
+ public:
+  void resume(Effect::resume_t value) &&;
+};
+
 template <typename Effect, typename yield_t>
   requires is_effect<Effect>
 class resume_context {
@@ -70,6 +80,8 @@ class resume_context {
       raise_context<typename Effect::resume_t>& ctx)
       : handler_frame(handler_sp), ctx(ctx) {}
   yield_t operator()(Effect::resume_t value);
+
+  saved_resumption<Effect> save();
 };
 
 template <typename Effect, typename yield_t>
@@ -105,15 +117,6 @@ template <typename return_t, typename Effect, typename F, typename H>
 // set optnone to prevent inlining & IPA const fold
 __attribute__((optnone)) return_t do_handle(F&& doo, H&& handler);
 
-template <typename Effect>
-  requires is_effect<Effect>
-class saved_resumption {
-  sigjmp_buf jmp;
-
- public:
-  void resume(Effect::resume_t value) &&;
-};
-
 // ===== implementation =====
 
 template <typename resume_t>
@@ -140,13 +143,13 @@ struct handler_resumption_frame {
 };
 
 struct handler_frame_base {
-  std::type_index effect;
+  std::type_index effect_type;
   uint64_t id;
   uintptr_t resume_fp;
   uintptr_t handler_sp;
   std::vector<handler_resumption_frame> resumption_frames;
-  uintptr_t parent;
-  bool no_nontail_resume;
+  uintptr_t parent_delta;
+  bool is_tail_resumptive;
 
   handler_frame_base(std::type_index effect,
       uintptr_t resume_fp,
@@ -194,7 +197,7 @@ struct handler_frame : public handler_frame_yield<Effect, yield_t> {
       uintptr_t handler_sp)
       : handler_frame_yield<Effect, yield_t>(effect, resume_fp, handler_sp),
         handler(handler) {
-    handler_frame_base::no_nontail_resume = false;
+    handler_frame_base::is_tail_resumptive = false;
   }
 
   virtual Effect::resume_t invoke(Effect::raise_t in,
@@ -216,7 +219,7 @@ struct handler_frame2 : public handler_frame_yield<Effect, yield_t> {
       uintptr_t handler_sp)
       : handler_frame_yield<Effect, yield_t>(effect, resume_fp, handler_sp),
         handler(handler) {
-    handler_frame_base::no_nontail_resume = true;
+    handler_frame_base::is_tail_resumptive = true;
   }
 
   virtual Effect::resume_t invoke(Effect::raise_t in,
@@ -239,7 +242,7 @@ struct handler_frame3 : public handler_frame_yield<Effect, yield_t> {
       uintptr_t handler_sp)
       : handler_frame_yield<Effect, yield_t>(effect, resume_fp, handler_sp),
         handler(handler) {
-    handler_frame_base::no_nontail_resume = false;
+    handler_frame_base::is_tail_resumptive = false;
   }
 
   virtual Effect::resume_t invoke(Effect::raise_t in,
@@ -262,7 +265,7 @@ struct handler_frame4 : public handler_frame_yield<Effect, yield_t> {
       uintptr_t handler_sp)
       : handler_frame_yield<Effect, yield_t>(effect, resume_fp, handler_sp),
         handler(handler) {
-    handler_frame_base::no_nontail_resume = true;
+    handler_frame_base::is_tail_resumptive = true;
   }
 
   virtual Effect::resume_t invoke(Effect::raise_t in,
@@ -322,7 +325,7 @@ yield_t resume_context<Effect, yield_t>::operator()(Effect::resume_t value) {
   }
 }
 
-__attribute__((always_inline)) inline void resume_nontail(ptrdiff_t,
+__attribute__((always_inline)) inline void resume_remain(ptrdiff_t,
     handler_resumption_frame*);
 
 template <typename yield_t, typename Effect, typename Handler>
@@ -390,11 +393,7 @@ return_t do_handle(F&& doo, H&& handler) {
   auto& frame_yield =
       static_cast<handler_frame_yield<Effect, return_t>&>(*frames.back());
 
-#ifdef NDEBUG
-  auto guard = sg::make_scope_guard([sp] {
-#else
-  auto guard = sg::make_scope_guard([sp, frame_id] {
-#endif
+  auto guard = sg::make_scope_guard([=] {
 #ifdef EFF_UNWIND_TRACE
     auto& frame = frames.back();
     fmt::println("destructor for handler of {} [{:#x}]",
@@ -420,7 +419,7 @@ return_t do_handle(F&& doo, H&& handler) {
       fmt::println("resumption frame size = {:#x}", rframe->saved_stack.size());
 #endif
 
-      resume_nontail(sp_delta, rframe);
+      resume_remain(sp_delta, rframe);
     }
 
 #ifndef NDEBUG
@@ -457,12 +456,12 @@ Effect::resume_t raise(typename Effect::raise_t value) {
     fmt::println("try handler for {}, found {}",
         demangle(typeid(Effect).name()), demangle((*frame)->effect.name()));
 #endif
-    if ((*frame)->parent > 0) {
+    if ((*frame)->parent_delta > 0) {
 #ifdef EFF_UNWIND_TRACE
       fmt::println("search backward by {}", (*frame)->parent - 1);
 #endif
-      frame += (*frame)->parent - 1;
-    } else if ((*frame)->effect == typeid(Effect)) {
+      frame += (*frame)->parent_delta - 1;
+    } else if ((*frame)->effect_type == typeid(Effect)) {
       break;
     }
   }
@@ -480,14 +479,14 @@ Effect::resume_t raise(typename Effect::raise_t value) {
   // 2.320 s ±  0.010 s vs 2.510 s ±  0.039 s
   auto delta = frame - frames.rbegin() + 1;
   auto& pframe = frames.back();
-  auto eparent = pframe->parent;
-  pframe->parent = delta;
-  auto sg = pframe->parent != eparent
+  auto eparent = pframe->parent_delta;
+  pframe->parent_delta = delta;
+  auto sg = pframe->parent_delta != eparent
       ? std::make_optional(sg::make_scope_guard(
-            [&pframe, eparent]() { pframe->parent = eparent; }))
+            [&pframe, eparent]() { pframe->parent_delta = eparent; }))
       : std::nullopt;
   // avoid setjmp if tail-resuming
-  if ((*frame)->no_nontail_resume) {
+  if ((*frame)->is_tail_resumptive) {
     return hframe.invoke(value, ctx);
   }
   // 1.580 s ±  0.006 s vs 69.526 s (setjmp)
@@ -548,7 +547,7 @@ void yield_context<Effect, yield_t>::operator()(yield_t value) {
 #endif
   ex->exception_cleanup =
       (decltype(ex->exception_cleanup))(new handler_frame_found(
-          frame.effect.name(), set_x0, set_x1));
+          frame.effect_type.name(), set_x0, set_x1));
   int unw_error;
   while ((unw_error = unw_step(&cur_cursor)) > 0) {
     unw_proc_info_t pi;
@@ -591,7 +590,7 @@ void yield_context<Effect, yield_t>::operator()(yield_t value) {
   abort();
 }
 
-static void __resume_nontail(uint64_t sp, handler_resumption_frame* frame) {
+static void __resume_remain(uint64_t sp, handler_resumption_frame* frame) {
   assert(!frame->saved_stack.empty());
 #ifdef EFF_UNWIND_TRACE
   fmt::println("restore stack = {:#x} - {:#x} ({:#x})", sp,
@@ -610,10 +609,33 @@ static void __resume_nontail(uint64_t sp, handler_resumption_frame* frame) {
   }
 }
 
-__attribute__((always_inline)) inline void resume_nontail(ptrdiff_t sp_delta,
+__attribute__((always_inline)) inline void resume_remain(ptrdiff_t sp_delta,
     handler_resumption_frame* frame) {
   asm volatile("sub sp, sp, %0" : : "r"(sp_delta));
   uint64_t sp;
   asm volatile("mov %0, sp" : "=r"(sp));
-  __resume_nontail(sp, frame);
+  __resume_remain(sp, frame);
 }
+
+template <typename Effect, typename yield_t>
+  requires is_effect<Effect>
+saved_resumption<Effect> resume_context<Effect, yield_t>::save() {
+  auto sp = get_sp();
+  auto sp2 = handler_frame.handler_sp;
+
+  saved_resumption<Effect> resumption;
+  resumption.saved_stack.resize(sp2 - sp);
+  resumption.saved_frames = frames;
+#ifdef EFF_UNWIND_TRACE
+  print_frames("save_stack");
+  fmt::println("saved stack = {:#x} - {:#x}", sp, sp2);
+#endif
+  std::copy(reinterpret_cast<char*>(sp), reinterpret_cast<char*>(sp2),
+      resumption.saved_stack.begin());
+
+  return resumption;
+}
+
+template <typename Effect>
+  requires is_effect<Effect>
+void saved_resumption<Effect>::resume(Effect::resume_t value) && {}

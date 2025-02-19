@@ -33,12 +33,12 @@ uint64_t last_frame_id = 0;
 // TODO: add mutex guard for frame
 std::vector<std::shared_ptr<handler_frame_base>> frames;
 
-handler_frame_base::handler_frame_base(std::type_index effect,
+handler_frame_base::handler_frame_base(std::type_index effect_type,
     uintptr_t resume_fp,
     uintptr_t handler_sp)
-    : effect(effect), resume_fp(resume_fp), handler_sp(handler_sp) {
+    : effect_type(effect_type), resume_fp(resume_fp), handler_sp(handler_sp) {
   id = last_frame_id++;
-  parent = 0;
+  parent_delta = 0;
 }
 
 handler_frame_base::~handler_frame_base() {}

@@ -9,7 +9,7 @@
 #ifdef TEST_RAII
 int x = 0;
 struct RAII {
-  ~RAII() { x += 1; }
+  ~RAII() { fmt::println("destructor"); }
 };
 #endif
 

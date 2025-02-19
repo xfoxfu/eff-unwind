@@ -10,7 +10,7 @@ namespace eff = cpp_effects;
 #ifdef TEST_RAII
 int x = 0;
 struct RAII {
-  ~RAII() { x += 1; }
+  ~RAII() { std::cout << "destructor" << std::endl; }
 };
 #endif
 

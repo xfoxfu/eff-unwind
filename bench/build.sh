@@ -16,9 +16,9 @@ fd -e cpp -p cpp-effects -x clang++ 'cpp-effects/src/{/}' -std=c++17 -O2 \
   -Icpp-effects/include \
   -I/opt/homebrew/opt/boost/include \
   -L/opt/homebrew/opt/boost/lib \
-  -lboost_fiber-mt \
-  -lboost_context-mt \
-  -lboost_coroutine-mt
+  -lboost_fiber \
+  -lboost_context \
+  -lboost_coroutine
 
 #  -I/opt/homebrew/Cellar/fmt/11.0.2/include -L/opt/homebrew/Cellar/fmt/11.0.2/lib -lfmt
 clang++ vanilla-cpp/src/exception.cpp -std=c++17 -O2 -o vanilla-cpp/bin/exception
