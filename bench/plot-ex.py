@@ -2,19 +2,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import json
 
-cases = (
-    "fibonacci_recursive",
-    "countdown",
-    # "generator",
-    "handler_sieve",
-    "iterator",
-    "parsing_dollars",
-    "resume_nontail",
-    # "test_exception",
-    "triples",
-    "product_early",
-)
-runtimes = ("eff-unwind", "Koka", "cpp-effects", "OCaml")
+cases = ("test_exception",)
+runtimes = ("eff-unwind", "Koka", "cpp-effects", "C++")
 penguin_means = {}
 penguin_stddev = {}
 for runtime in runtimes:
@@ -39,10 +28,13 @@ for case in cases:
             if result["command"].startswith("./ocaml/bin/"):
                 penguin_means["OCaml"][caseidx] = result["mean"] * 1000
                 penguin_stddev["OCaml"][caseidx] = result["stddev"] * 1000
+            if result["command"].startswith("./vanilla-cpp/bin/"):
+                penguin_means["C++"][caseidx] = result["mean"] * 1000
+                penguin_stddev["C++"][caseidx] = result["stddev"] * 1000
 
 
 x = np.arange(len(cases))  # the label locations
-width = 0.2  # the width of the bars
+width = 0.1  # the width of the bars
 multiplier = 0
 
 fig, ax = plt.subplots(layout="constrained")
@@ -52,40 +44,19 @@ for attribute, measurement in penguin_means.items():
     rects = ax.barh(
         x + offset, measurement, width, label=attribute, xerr=penguin_stddev[attribute]
     )
-    labels = ax.bar_label(
-        rects,
-        labels=[f"{m:.2f}" if m > 0 else "N/A" for m in measurement],
-        padding=3,
-        fontsize=9,
-    )
+    ax.bar_label(rects, padding=3)
     multiplier += 1
 
 # Add some text for labels, title and custom x-axis tick labels, etc.
 ax.set_xlabel("Time (ms)")
-ax.set_title("Execution time by implementation")
+# ax.set_title("Execution time by implementation")
 ax.set_yticks(x + width, cases, rotation=45)
-ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=5)
-ax.set_xlim(0, 5_000)
+ax.legend(loc="upper center", bbox_to_anchor=(0.4, -0.3), ncol=4)
+ax.set_xlim(0, 4_000)
 ax.invert_yaxis()
 
-ax0 = ax.twinx()
-ax0.set_ylim(ax.get_ylim())
-ticks = [
-    i * width + j
-    for i, (attribute, measurement) in enumerate(penguin_means.items())
-    for j, m in enumerate(measurement)
-    if m > 5_000
-]
-labels = [
-    f"{m:.2f}"
-    for i, (attribute, measurement) in enumerate(penguin_means.items())
-    for j, m in enumerate(measurement)
-    if m > 5_000
-]
-ax0.set_yticks(ticks, labels, fontsize=9)
-
-fig.set_figwidth(11.69)
-fig.set_figheight(5.845)
+fig.set_figwidth(5.08)
+fig.set_figheight(1.8)
 
 # plt.show()
-plt.savefig("figure7.pdf")
+plt.savefig("figure8.pdf")

@@ -1,7 +1,7 @@
 set -x
 
-# for case in $(fd -e kk --format '{/.}'); do
-for case in resume_nontail; do
+for case in $(fd -e kk --format '{/.}'); do
+# for case in resume_nontail; do
     if [[ "$case" = "test_exception" ]]; then
         continue
     fi
@@ -24,11 +24,11 @@ for case in resume_nontail; do
     # echo $(./$case-kk $SIZE)
 done
 
-# hyperfine -r 10 --export-json test_exception.json -N \
-#     "../build/test_exception" \
-#     "./koka/bin/test_exception-kk" \
-#     "./cpp-effects/bin/test_exception" \
-#     "./vanilla-cpp/bin/exception"
+hyperfine -r 10 --export-json test_exception.json -N \
+    "../build/test_exception" \
+    "./koka/bin/test_exception-kk" \
+    "./cpp-effects/bin/test_exception" \
+    "./vanilla-cpp/bin/exception"
 
 # hyperfine -r 10 --export-json test_exception2.json -N \
 #     "../build/test_exception2" \
