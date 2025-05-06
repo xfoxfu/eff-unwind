@@ -1,0 +1,40 @@
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Set up Homebrew
+        id: set-up-homebrew
+        uses: Homebrew/actions/setup-homebrew@master
+      - uses: actions/setup-python@v5
+      - name: Install dependencies
+        run: |
+          brew install boost cmake ninja ocaml fd hyperfine
+          curl -sSL https://github.com/koka-lang/koka/releases/download/v2.6.0/install.sh | sh -s -- --prefix=~/.local
+      - name: Build
+        run: |
+          cd bench
+          bash build.sh
+      - name: Run benchmarks
+        run: |
+          cd bench
+          bash bench.sh
+      - name: Generate figures
+        run: |
+          cd bench
+          pip3 install matplotlib --break-system-packages
+          pip3 install numpy --break-system-packages
+          python3 plot.py
+          python3 plot-ex.py
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: bench/*.{pdf,json}
