@@ -37,4 +37,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
-          path: bench/*.{pdf,json}
+          path: |
+            bench/*.json
+            bench/*.pdf
